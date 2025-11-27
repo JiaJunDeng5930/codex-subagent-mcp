@@ -641,7 +641,8 @@ server.addTool({
 
 server.addTool({
   name: 'delegate_batch',
-  description: 'Run multiple sub-agents in parallel',
+  description:
+    'Run multiple sub-agents in parallel. Input must be {items:[{agent,task,...}], token?}; each item matches delegate.',
   inputSchema: toJsonSchema(DelegateBatchParamsSchema),
   handler: (args: unknown) => delegateBatchHandler(args),
 });

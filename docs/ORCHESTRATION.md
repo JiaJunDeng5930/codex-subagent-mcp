@@ -22,7 +22,7 @@ Only the orchestrator may delegate further. The server issues a random `ORCHESTR
 
 ## delegate_batch
 
-The orchestrator can run independent steps in parallel via `delegate_batch(items, token)`. Results retain item ordering and share the same token gating.
+Call `delegate_batch({ items: [...], token })`; `items` is a required array of the same objects accepted by `delegate` (`agent`, `task`, optional persona/profile/approval/sandbox/cwd`). Results retain item ordering and share the same token gating.
 
 ## To‑Do persistence
 
