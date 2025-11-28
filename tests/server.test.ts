@@ -36,6 +36,51 @@ describe('Mirroring', () => {
     rmSync(sourceDir, { recursive: true, force: true });
     rmSync(destinationDir, { recursive: true, force: true });
   });
+
+  it('applies .gitignore patterns when mirroring', () => {
+    const basePath = process.cwd();
+    const sourceDir = join(basePath, `tmp-mcp-src-${Date.now()}`);
+    const destinationDir = join(basePath, `tmp-mcp-dest-${Date.now()}`);
+    mkdirSync(sourceDir, { recursive: true });
+    writeFileSync(join(sourceDir, '.gitignore'), '*.log\n', 'utf8');
+    writeFileSync(join(sourceDir, 'keep.txt'), 'ok', 'utf8');
+    writeFileSync(join(sourceDir, 'secret.log'), 'nope', 'utf8');
+    mkdirSync(destinationDir, { recursive: true });
+
+    mirrorRepoIfRequested(sourceDir, destinationDir, true);
+
+    expect(existsSync(join(destinationDir, 'keep.txt'))).toBe(true);
+    expect(existsSync(join(destinationDir, 'secret.log'))).toBe(false);
+
+    rmSync(sourceDir, { recursive: true, force: true });
+    rmSync(destinationDir, { recursive: true, force: true });
+  });
+
+  it('respects forced skips but bypasses .gitignore when mirror all is set', () => {
+    const previousMirrorAll = process.env.SUBAGENTS_MIRROR_ALL;
+    process.env.SUBAGENTS_MIRROR_ALL = '1';
+
+    const basePath = process.cwd();
+    const sourceDir = join(basePath, `tmp-mcp-src-${Date.now()}`);
+    const destinationDir = join(basePath, `tmp-mcp-dest-${Date.now()}`);
+    mkdirSync(sourceDir, { recursive: true });
+    mkdirSync(join(sourceDir, '.git'), { recursive: true });
+    writeFileSync(join(sourceDir, '.git', 'HEAD'), 'ref: main', 'utf8');
+    writeFileSync(join(sourceDir, '.gitignore'), '*.log\n', 'utf8');
+    writeFileSync(join(sourceDir, 'secret.log'), 'should-copy-when-mirror-all', 'utf8');
+    writeFileSync(join(sourceDir, 'keep.txt'), 'ok', 'utf8');
+    mkdirSync(destinationDir, { recursive: true });
+
+    mirrorRepoIfRequested(sourceDir, destinationDir, true);
+
+    expect(existsSync(join(destinationDir, 'keep.txt'))).toBe(true);
+    expect(existsSync(join(destinationDir, 'secret.log'))).toBe(true);
+    expect(existsSync(join(destinationDir, '.git'))).toBe(false);
+
+    rmSync(sourceDir, { recursive: true, force: true });
+    rmSync(destinationDir, { recursive: true, force: true });
+    process.env.SUBAGENTS_MIRROR_ALL = previousMirrorAll;
+  });
 });
 
 describe('Spawn wrapper', () => {

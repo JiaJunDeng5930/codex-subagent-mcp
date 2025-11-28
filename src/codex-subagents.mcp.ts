@@ -11,11 +11,12 @@
 
 import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, basename, resolve } from 'path';
+import { join, basename, resolve, relative } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
 import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep } from './orchestration';
+import ignore, { Ignore } from 'ignore';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
@@ -142,18 +143,36 @@ export function mirrorRepoIfRequested(sourceWorkingDirectory: string | undefined
   if (!isWithinBase) {
     throw new Error(`Refusing to mirror outside base working directory: ${src}`);
   }
-  // TODO: 检查这里的忽略文件的逻辑是否正确，考虑扩展忽略列表，并且拼接 .gitignore
-  const skip = new Set(['.git', '.ssh', '.env', '.env.local', 'node_modules']);
+  const forcedSkip = new Set(['.git', '.ssh', '.env', '.env.local', '.env.development', '.env.production', 'node_modules', '.DS_Store']);
   const mirrorAll = process.env.SUBAGENTS_MIRROR_ALL === '1';
+  const gitignore = loadGitignore(src);
   cpSync(src, destinationWorkingDirectory, {
     recursive: true,
     force: true,
     filter: (p: string) => {
-      if (mirrorAll) return true;
       const name = basename(p);
-      return !skip.has(name);
+      if (forcedSkip.has(name)) return false;
+      if (mirrorAll) return true;
+      const relative = normalizeRelativePath(src, p);
+      if (relative === '') return true;
+      if (!gitignore) return true;
+      return !gitignore.ignores(relative);
     },
   });
+}
+
+function loadGitignore(root: string): Ignore | null {
+  const gitignorePath = join(root, '.gitignore');
+  if (!existsSync(gitignorePath)) return null;
+  const matcher = ignore();
+  const content = readFileSync(gitignorePath, 'utf8');
+  matcher.add(content.split(/\r?\n/).filter(Boolean));
+  return matcher;
+}
+
+function normalizeRelativePath(root: string, targetPath: string): string {
+  const rel = relative(root, targetPath);
+  return rel.replace(/\\/g, '/');
 }
 
 // -------- Dynamic agents loading from directory --------
