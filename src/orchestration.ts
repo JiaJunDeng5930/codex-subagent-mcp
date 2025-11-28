@@ -30,6 +30,45 @@ function todoPath(request_id: string, cwd: string) {
   return join(cwd, 'orchestration', request_id, 'todo.json');
 }
 
+function ensureTodoInitialized(params: DelegateParams, cwd: string, request_id: string) {
+  const root = join(cwd, 'orchestration', request_id);
+  mkdirSync(root, { recursive: true });
+  const todoFile = join(root, 'todo.json');
+  if (existsSync(todoFile)) return;
+
+  const todo: Todo = {
+    request_id,
+    created_at: new Date().toISOString(),
+    user_prompt: params.task,
+    requested_agent: params.agent,
+    status: 'active',
+    steps: [],
+    next_actions: [],
+    summary: null,
+  };
+
+  saveTodo(todo, cwd);
+}
+
+function buildEnvelope(params: DelegateParams, request_id: string) {
+  const payload = {
+    request_id,
+    requested_agent: params.agent,
+    cwd: params.cwd ?? null,
+    mirror_repo: params.mirror_repo ?? false,
+    profile: params.profile ?? null,
+    has_persona: Boolean(params.persona),
+  };
+
+  return [
+    '[[ORCH-ENVELOPE]]',
+    JSON.stringify(payload, null, 2),
+    '[[/ORCH-ENVELOPE]]',
+    '',
+    params.task,
+  ].join('\n');
+}
+
 export function loadTodo(request_id: string, cwd: string): Todo {
   const path = todoPath(request_id, cwd);
   const raw = readFileSync(path, 'utf8');
@@ -38,9 +77,9 @@ export function loadTodo(request_id: string, cwd: string): Todo {
 
 export function saveTodo(todo: Todo, cwd: string) {
   const path = todoPath(todo.request_id, cwd);
-  const temp = path + '.tmp';
-  writeFileSync(temp, JSON.stringify(todo, null, 2), 'utf8');
-  renameSync(temp, path);
+  const stagingPath = `${path}.tmp`;
+  writeFileSync(stagingPath, JSON.stringify(todo, null, 2), 'utf8');
+  renameSync(stagingPath, path);
 }
 
 export function appendStep(todo: Todo, partial: Pick<Step, 'title' | 'agent' | 'status'> & Partial<Step>) {
@@ -61,10 +100,9 @@ export function appendStep(todo: Todo, partial: Pick<Step, 'title' | 'agent' | '
 }
 
 export function updateStep(todo: Todo, id: string, patch: Partial<Step>) {
-  const idx = todo.steps.findIndex(s => s.id === id);
-  if (idx !== -1) {
-    todo.steps[idx] = { ...todo.steps[idx], ...patch };
-  }
+  const index = todo.steps.findIndex(step => step.id === id);
+  if (index === -1) return;
+  todo.steps[index] = { ...todo.steps[index], ...patch };
 }
 
 export function finalize(todo: Todo, summary: string, status: 'done' | 'canceled' = 'done') {
@@ -75,36 +113,7 @@ export function finalize(todo: Todo, summary: string, status: 'done' | 'canceled
 export function routeThroughOrchestrator(params: DelegateParams) {
   const cwd = params.cwd ?? process.cwd();
   const request_id = params.request_id || randomUUID();
-  const root = join(cwd, 'orchestration', request_id);
-  mkdirSync(root, { recursive: true });
-  const todoFile = join(root, 'todo.json');
-  if (!existsSync(todoFile)) {
-    const todo: Todo = {
-      request_id,
-      created_at: new Date().toISOString(),
-      user_prompt: params.task,
-      requested_agent: params.agent,
-      status: 'active',
-      steps: [],
-      next_actions: [],
-      summary: null,
-    };
-    saveTodo(todo, cwd);
-  }
-  const envelope = [
-    '[[ORCH-ENVELOPE]]',
-    JSON.stringify({
-      request_id,
-      requested_agent: params.agent,
-      cwd: params.cwd ?? null,
-      mirror_repo: params.mirror_repo ?? false,
-      profile: params.profile ?? null,
-      has_persona: Boolean(params.persona),
-    }, null, 2),
-    '[[/ORCH-ENVELOPE]]',
-    '',
-    params.task,
-  ].join('\n');
+  ensureTodoInitialized(params, cwd, request_id);
+  const envelope = buildEnvelope(params, request_id);
   return { agent: 'orchestrator', task: envelope, request_id };
 }
-

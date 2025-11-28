@@ -23,4 +23,3 @@ Shared Protocol — Output Contract:
 1. TL;DR • 2. Plan • 3. Artifacts (code/commands/assets with full paths) • 4. Risks • 5. Next Actions • 6. DoD.
 
 Follow the Shared Protocol. Prefer code blocks per file with full paths (e.g., `App/Sources/Features/Onboarding/OnboardingView.swift`). Permissions inherit from the calling conversation.
-

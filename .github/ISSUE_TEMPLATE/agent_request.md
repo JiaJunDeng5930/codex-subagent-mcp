@@ -22,4 +22,3 @@ sandbox_mode: read-only|workspace-write|danger-full-access
 
 **Risks / trust boundaries**
 (e.g., shell, git history, secrets)
-

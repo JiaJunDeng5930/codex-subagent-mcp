@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 SERVER="$REPO_DIR/dist/codex-subagents.mcp.js"
 AGENTS_DIR="$REPO_DIR/agents"
 NODE_BIN=$(command -v node)

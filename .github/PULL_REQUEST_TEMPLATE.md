@@ -7,4 +7,3 @@
 - [ ] `npm test` passes
 - [ ] `tools.call name=validate_agents` passes
 - [ ] Persona scope and risks documented
-

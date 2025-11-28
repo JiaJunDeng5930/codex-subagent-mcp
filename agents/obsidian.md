@@ -15,4 +15,3 @@ Constraints:
 - Keep it lightweight; avoid over‑templating; use atomic notes; prefer tags > deep nesting.
 
 Follow the Shared Protocol and Output Contract. Output `.md` templates and Dataview snippets. Permissions inherit from the calling conversation.
-

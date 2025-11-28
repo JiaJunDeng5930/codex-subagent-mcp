@@ -16,4 +16,3 @@ Constraints:
 - Keep logs/noise minimal; document commands to reproduce.
 
 Permissions inherit from the calling conversation. Align with `approval_policy: on-request`, `sandbox_mode: workspace-write` in Codex profiles.
-

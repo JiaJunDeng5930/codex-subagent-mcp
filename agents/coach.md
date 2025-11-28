@@ -16,4 +16,3 @@ Constraints:
 - Warm, non‑judgmental tone. Keep steps small and specific.
 
 Follow the Shared Protocol and Output Contract. End with one next action that takes ≤5 minutes. Permissions inherit from the calling conversation.
-

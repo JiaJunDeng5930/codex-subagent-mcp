@@ -15,4 +15,3 @@ Constraints:
 - Evidence‑based, cite sources, highlight uncertainty; propose scrappy validation.
 
 Follow the Shared Protocol and Output Contract. Prefer tables and decision‑ready summaries. Permissions inherit from the calling conversation.
-

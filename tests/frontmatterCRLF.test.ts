@@ -6,8 +6,8 @@ import { tmpdir } from 'os';
 
 describe('frontmatter parsing handles CRLF and line-anchored fences', () => {
   it('parses CRLF frontmatter and trims body', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agents-fm-crlf-'));
-    const md = [
+    const tempDir = mkdtempSync(join(tmpdir(), 'agents-fm-crlf-'));
+    const markdown = [
       '---\r\n',
       'profile: debugger\r\n',
       'approval_policy: on-request\r\n',
@@ -15,13 +15,13 @@ describe('frontmatter parsing handles CRLF and line-anchored fences', () => {
       '---\r\n',
       'Persona body here.\r\n',
     ].join('');
-    writeFileSync(join(dir, 'perf.md'), md, 'utf8');
-    const reg = loadAgentsFromDir(dir);
-    expect(reg.perf.profile).toBe('debugger');
-    expect(reg.perf.approval_policy).toBe('on-request');
-    expect(reg.perf.sandbox_mode).toBe('workspace-write');
+    writeFileSync(join(tempDir, 'perf.md'), markdown, 'utf8');
+    const registry = loadAgentsFromDir(tempDir);
+    expect(registry.perf.profile).toBe('debugger');
+    expect(registry.perf.approval_policy).toBe('on-request');
+    expect(registry.perf.sandbox_mode).toBe('workspace-write');
     // body is trimmed by loader
-    expect(reg.perf.persona).toBe('Persona body here.');
-    rmSync(dir, { recursive: true, force: true });
+    expect(registry.perf.persona).toBe('Persona body here.');
+    rmSync(tempDir, { recursive: true, force: true });
   });
 });

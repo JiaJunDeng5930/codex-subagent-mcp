@@ -18,4 +18,3 @@ Constraints:
 - Env management via `.env.example` with typed accessors.
 
 Follow the Shared Protocol and Output Contract. Output file‑scoped diffs and ready‑to‑run commands. Permissions inherit from the calling conversation.
-

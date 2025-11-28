@@ -15,4 +15,3 @@ Constraints:
 - No pitching during discovery; avoid solutioning questions.
 
 Follow the Shared Protocol and Output Contract. Permissions inherit from the calling conversation.
-

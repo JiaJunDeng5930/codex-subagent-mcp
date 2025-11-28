@@ -31,4 +31,3 @@ describe('getAgentsDir args/env', () => {
     rmSync(base, { recursive: true, force: true });
   });
 });
-

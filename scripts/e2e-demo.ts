@@ -7,41 +7,52 @@ type Rpc = {
   close: () => void;
 };
 
+type FrameState = { buffer: Buffer };
+type PendingMap = Map<number, (v: unknown) => void>;
+
+function extractFrame(state: FrameState) {
+  const headerEnd = state.buffer.indexOf('\r\n\r\n');
+  if (headerEnd === -1) return null;
+  const header = state.buffer.slice(0, headerEnd).toString('utf8');
+  const match = /Content-Length:\s*(\d+)/i.exec(header);
+  if (!match) {
+    state.buffer = state.buffer.slice(headerEnd + 4);
+    return null;
+  }
+  const length = parseInt(match[1], 10);
+  const bodyEnd = headerEnd + 4 + length;
+  if (state.buffer.length < bodyEnd) return null;
+  const body = state.buffer.slice(headerEnd + 4, bodyEnd).toString('utf8');
+  state.buffer = state.buffer.slice(bodyEnd);
+  return body;
+}
+
+function dispatchFrame(body: string, pending: PendingMap) {
+  const message = JSON.parse(body);
+  const responseId = message.id;
+  const payload = message.result ?? message.error;
+  const resolver = pending.get(responseId);
+  if (!resolver) return;
+  pending.delete(responseId);
+  resolver(payload);
+}
+
 function startServer(): Rpc {
   const child = spawn('node', ['dist/codex-subagents.mcp.js'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
 
-  let buf = Buffer.alloc(0);
-  const pending = new Map<number, (v: unknown) => void>();
+  const state: FrameState = { buffer: Buffer.alloc(0) };
+  const pending: PendingMap = new Map();
   let id = 1;
 
   child.stdout.on('data', (chunk: Buffer) => {
-    buf = Buffer.concat([buf, chunk]);
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const headerEnd = buf.indexOf('\r\n\r\n');
-      if (headerEnd === -1) break;
-      const header = buf.slice(0, headerEnd).toString('utf8');
-      const m = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!m) {
-        buf = buf.slice(headerEnd + 4);
-        continue;
-      }
-      const len = parseInt(m[1], 10);
-      const total = headerEnd + 4 + len;
-      if (buf.length < total) break;
-      const body = buf.slice(headerEnd + 4, total).toString('utf8');
-      buf = buf.slice(total);
-      const msg = JSON.parse(body);
-      const rid = msg.id;
-      const res = msg.result ?? msg.error;
-      const fn = pending.get(rid);
-      if (fn) {
-        pending.delete(rid);
-        fn(res);
-      }
-    }
+    state.buffer = Buffer.concat([state.buffer, chunk]);
+    let frame: string | null;
+    do {
+      frame = extractFrame(state);
+      if (frame) dispatchFrame(frame, pending);
+    } while (frame);
   });
 
   const send = (method: string, params?: unknown) =>
@@ -122,4 +133,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-

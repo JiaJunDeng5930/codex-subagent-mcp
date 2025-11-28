@@ -30,6 +30,7 @@ npm start
 ```
 
 Tools exposed by this server:
+
 - Primary: `delegate`
 - Support: `list_agents`, `validate_agents`
 
@@ -70,7 +71,7 @@ Tip: See `docs/SECURITY.md` for trust boundaries and `docs/OPERATIONS.md` for E2
 
 ## Wiring with Codex CLI
 
- Build the server and point Codex at the **absolute** path to the compiled entrypoint. Pass the agents directory explicitly so the server doesn't scan until after the handshake. The server also falls back to an `agents/` folder adjacent to the installed binary (e.g. `dist/../agents`) if `--agents-dir` and `CODEX_SUBAGENTS_DIR` are not provided:
+Build the server and point Codex at the **absolute** path to the compiled entrypoint. Pass the agents directory explicitly so the server doesn't scan until after the handshake. The server also falls back to an `agents/` folder adjacent to the installed binary (e.g. `dist/../agents`) if `--agents-dir` and `CODEX_SUBAGENTS_DIR` are not provided:
 
 ```
 # ~/.codex/config.toml
@@ -147,9 +148,10 @@ There are no hardcoded built‑in agent names. The server loads agents from disk
 
 Add agents without code changes:
 
-1) File-based registry (recommended)
+1. File-based registry (recommended)
 
 - Create an agents directory and point the server to it via either:
+
   - Config args: add `"--agents-dir", "/path/to/agents"` in `~/.codex/config.toml` under the MCP server args
   - Env var: `CODEX_SUBAGENTS_DIR=/path/to/agents`
   - Defaults (auto-detected): `./agents` or `./.codex-subagents/agents`
@@ -179,7 +181,7 @@ Or JSON `agents/migrations.json`:
 }
 ```
 
-2) Ad-hoc agent via tool params
+2. Ad-hoc agent via tool params
 
 Call `delegate` with a new name and supply both `profile` and `persona`:
 
@@ -209,6 +211,7 @@ tools.call name=validate_agents
 # or
 tools.call name=validate_agents arguments={"dir":"/abs/path/to/agents"}
 ```
+
 Returns per-file errors/warnings and a summary. Invalid values are flagged; missing `profile` in Markdown is a warning (loader defaults to `default`).
 
 ## Build, Lint, Test
@@ -231,6 +234,7 @@ npm run e2e
 ```
 
 It will:
+
 1. Build the project.
 2. Write a temporary `~/.codex/config.toml` pointing to the built server.
 3. Run `/mcp` to verify the server is connected.
@@ -240,13 +244,13 @@ The script requires `OPENAI_API_KEY` and a working Codex CLI binary.
 
 ## Safety & Operations
 
-| Concern | This repo does |
-| --- | --- |
+| Concern                 | This repo does                                       |
+| ----------------------- | ---------------------------------------------------- |
 | Prevent handshake break | No stdout logs; debug only to stderr (`DEBUG_MCP=1`) |
-| Reduce blast radius | Temp workdir + optional `git worktree` isolation |
-| Gate risky personas | `validate_agents` + profiles/approvals alignment |
-| Network surface | Single tool (`delegate`); Codex handles model I/O |
-| Auditability | Agents live as files; reviewable in PRs |
+| Reduce blast radius     | Temp workdir + optional `git worktree` isolation     |
+| Gate risky personas     | `validate_agents` + profiles/approvals alignment     |
+| Network surface         | Single tool (`delegate`); Codex handles model I/O    |
+| Auditability            | Agents live as files; reviewable in PRs              |
 
 ## Troubleshooting MCP timeouts
 
@@ -283,6 +287,7 @@ Invite PRs that add new agents—see “Contribute an agent”.
    ```
 
    Then describe the persona in free text.
+
 2. Run `tools.call name=validate_agents`.
 3. Open a PR using the “Agent request / contribution” template.
 

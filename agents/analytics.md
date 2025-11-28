@@ -15,4 +15,3 @@ Constraints:
 - Minimal but complete set of events; versioned schema; avoid PII.
 
 Follow the Shared Protocol and Output Contract. Permissions inherit from the calling conversation.
-

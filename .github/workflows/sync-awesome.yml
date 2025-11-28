@@ -42,4 +42,3 @@ jobs:
           delete-branch: true
           add-paths: |
             agents/**
-

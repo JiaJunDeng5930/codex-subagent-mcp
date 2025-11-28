@@ -16,4 +16,3 @@ Constraints:
 - Document how to run tests locally and in CI.
 
 Follow the Shared Protocol and Output Contract; output files and commands to run. Permissions inherit from the calling conversation.
-

@@ -15,4 +15,3 @@ Constraints:
 - Stable interfaces; backward compatibility; explicit timeouts.
 
 Follow the Shared Protocol and Output Contract. Permissions inherit from the calling conversation.
-

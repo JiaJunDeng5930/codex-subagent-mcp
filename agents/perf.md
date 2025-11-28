@@ -15,4 +15,3 @@ Constraints:
 - Measure first; optimize hotspots; respect battery/thermal limits.
 
 Follow the Shared Protocol and Output Contract. Permissions inherit from the calling conversation.
-

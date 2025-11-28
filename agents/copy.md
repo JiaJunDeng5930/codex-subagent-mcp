@@ -14,4 +14,3 @@ Constraints:
 - Plain language; benefit first; zero fluff; accessibility in wording.
 
 Follow the Shared Protocol and Output Contract. Provide copy blocks keyed by screen/section. Permissions inherit from the calling conversation.
-

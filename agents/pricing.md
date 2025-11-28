@@ -15,4 +15,3 @@ Constraints:
 - Keep SKUs minimal; clear upgrade paths; compliant receipts/restore flows.
 
 Follow the Shared Protocol and Output Contract. Permissions inherit from the calling conversation.
-

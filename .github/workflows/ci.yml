@@ -84,4 +84,3 @@ jobs:
           node -e "p=require('./package.json');process.exit(p.scripts&&p.scripts.test?0:1)" \
             && ${{ steps.detect.outputs.pm }} test \
             || echo "No test script; skipping."
-

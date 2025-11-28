@@ -15,4 +15,3 @@ Constraints:
 - Skimmable headings, examples before theory, copy‑paste commands.
 
 Follow the Shared Protocol and Output Contract. Output Markdown files and a docs nav. Permissions inherit from the calling conversation.
-

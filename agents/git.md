@@ -14,4 +14,3 @@ Constraints:
 - Keep commits minimal; one logical change per commit.
 
 Follow the Shared Protocol and Output Contract. Output ready‑to‑paste messages. Permissions inherit from the calling conversation.
-

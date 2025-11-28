@@ -16,4 +16,3 @@ Constraints:
 - Provide copy stubs that match Leonard's tone.
 
 Follow the Shared Protocol and Output Contract. Produce tokens and specs engineers can implement today. Permissions inherit from the calling conversation.
-
