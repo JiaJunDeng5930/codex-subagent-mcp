@@ -6,7 +6,7 @@ import { DelegateParams } from './codex-subagents.mcp';
 export type Step = {
   id: string;
   title: string;
-  agent: string;
+  requested_agent: string;
   status: 'queued' | 'running' | 'done' | 'blocked' | 'canceled';
   stdout_path: string | null;
   stderr_path: string | null;
@@ -82,12 +82,12 @@ export function saveTodo(todo: Todo, cwd: string) {
   renameSync(stagingPath, path);
 }
 
-export function appendStep(todo: Todo, partial: Pick<Step, 'title' | 'agent' | 'status'> & Partial<Step>) {
+export function appendStep(todo: Todo, partial: Pick<Step, 'title' | 'requested_agent' | 'status'> & Partial<Step>) {
   const id = `step-${todo.steps.length + 1}`;
   const step: Step = {
     id,
     title: partial.title,
-    agent: partial.agent,
+    requested_agent: partial.requested_agent,
     status: partial.status,
     stdout_path: partial.stdout_path ?? null,
     stderr_path: partial.stderr_path ?? null,

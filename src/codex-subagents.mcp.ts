@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  Minimal MCP server exposing a single tool `delegate` to spawn Codex CLI
- sub-agents with clean context via an ephemeral workdir and injected persona.
+ sub-agents with clean context via an ephemeral working directory and injected persona.
 
  Dependency footprint is minimal by default (zod). We implement a tiny
  JSON-RPC-over-stdio MCP wrapper compatible with basic MCP usage
@@ -23,7 +23,7 @@ const START_TIME = Date.now();
 export const ORCHESTRATOR_TOKEN = randomBytes(16).toString('hex');
 
 // Personas and profiles
-type AgentKey = 'reviewer' | 'debugger' | 'security';
+type AgentKey = 'reviewer' | 'debugger' | 'security'; // TODO: 考虑将内置的 subagent 换成 orchestrator，删掉 reviewer、debugger、security 这三个。
 export type ApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type AgentSpec = {
@@ -124,9 +124,13 @@ function buildSanitizedEnv(base: NodeJS.ProcessEnv = process.env) {
   return safeEnv;
 }
 
-export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
+export function run(
+  cmd: string,
+  args: string[],
+  workingDirectory?: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, env: buildSanitizedEnv() });
+    const child = spawn(cmd, args, { cwd: workingDirectory, env: buildSanitizedEnv() });
     const stdoutChunks: Array<string | Buffer> = [];
     const stderrChunks: Array<string | Buffer> = [];
 
@@ -153,29 +157,29 @@ export function run(cmd: string, args: string[], cwd?: string): Promise<{ code: 
   });
 }
 
-export function prepareWorkdir(agent: AgentKey): string {
+export function prepareWorkingDirectory(agent: AgentKey): string {
   return mkdtempSync(join(tmpdir(), `codex-${agent}-`));
 }
 
-export function writePersonaFile(workdir: string, agentName: string, persona: string): void {
+export function writePersonaFile(workingDirectory: string, agentName: string, persona: string): void {
   const header = `# Persona: ${agentName}\n\n`;
-  writeFileSync(join(workdir, 'AGENTS.md'), `${header}${persona.trim()}\n`, 'utf8');
+  writeFileSync(join(workingDirectory, 'AGENTS.md'), `${header}${persona.trim()}\n`, 'utf8');
 }
 
-export function mirrorRepoIfRequested(srcCwd: string | undefined, dest: string, mirror: boolean): void {
+export function mirrorRepoIfRequested(sourceWorkingDirectory: string | undefined, destinationWorkingDirectory: string, mirror: boolean): void {
   if (!mirror) return;
-  if (!srcCwd) return;
+  if (!sourceWorkingDirectory) return;
   // Validate and filter sensitive paths by default
   const base = resolve(process.cwd());
-  const src = resolve(srcCwd);
+  const src = resolve(sourceWorkingDirectory);
   const isWithinBase = src === base || src.startsWith(`${base}/`);
   if (!isWithinBase) {
-    throw new Error(`Refusing to mirror outside base cwd: ${src}`);
-}
-      // TODO: 检查这里的忽略文件的逻辑是否正确，考虑扩展忽略列表，并且拼接 .gitignore
+    throw new Error(`Refusing to mirror outside base working directory: ${src}`);
+  }
+  // TODO: 检查这里的忽略文件的逻辑是否正确，考虑扩展忽略列表，并且拼接 .gitignore
   const skip = new Set(['.git', '.ssh', '.env', '.env.local', 'node_modules']);
   const mirrorAll = process.env.SUBAGENTS_MIRROR_ALL === '1';
-  cpSync(src, dest, {
+  cpSync(src, destinationWorkingDirectory, {
     recursive: true,
     force: true,
     filter: (p: string) => {
@@ -259,7 +263,7 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
 function loadMarkdownAgent(fullPath: string, entry: string) {
   const raw = readFileSync(fullPath, 'utf8');
   const { attrs, body } = parseFrontmatter(raw);
-  const profile = (attrs.profile || attrs.agent_profile || 'default').trim();
+  const profile = (attrs.profile || 'default').trim();
   const approval_policy = resolveApprovalPolicy(attrs.approval_policy?.trim());
   const sandbox_mode = resolveSandboxMode(attrs.sandbox_mode?.trim());
   return {
@@ -322,7 +326,7 @@ function resolveAgent(agentName: string, parsed: DelegateParams): { spec: AgentS
 
 type DelegateContext = {
   parsed: z.infer<typeof DelegateParamsSchema>;
-  cwd: string;
+  workingDirectory: string;
   isOrchestratorRequest: boolean;
   hasServerToken: boolean;
   hasRequestId: boolean;
@@ -331,7 +335,7 @@ type DelegateContext = {
 function buildDelegateContext(parsed: z.infer<typeof DelegateParamsSchema>): DelegateContext {
   return {
     parsed,
-    cwd: parsed.cwd ?? process.cwd(),
+    workingDirectory: parsed.cwd ?? process.cwd(),
     isOrchestratorRequest: parsed.agent === 'orchestrator',
     hasServerToken: parsed.token === ORCHESTRATOR_TOKEN,
     hasRequestId: Boolean(parsed.request_id),
@@ -370,7 +374,7 @@ function ensureOrchestrationDirs(context: DelegateContext) {
   if (!isOrchestrator) return;
   if (!hasRequestId) return;
 
-  mkdirSync(join(context.cwd, 'orchestration', context.parsed.request_id as string), { recursive: true });
+  mkdirSync(join(context.workingDirectory, 'orchestration', context.parsed.request_id as string), { recursive: true });
 }
 
 function ensureAgentResolved(agentName: string, parsed: DelegateParams) {
@@ -395,18 +399,18 @@ function ensureAgentResolved(agentName: string, parsed: DelegateParams) {
 
 async function executeDelegation(
   parsed: DelegateParams,
-  cwd: string,
+  requestWorkingDirectory: string,
   agentName: string,
   spec: AgentSpec,
   isConfigured: boolean,
 ) {
-  const stepId = recordRunningStep(parsed, cwd);
-  const workdir = prepareWorkdir(isConfigured ? (agentName as AgentKey) : 'reviewer');
-  writePersonaFile(workdir, agentName, spec.persona);
+  const stepId = recordRunningStep(parsed, requestWorkingDirectory);
+  const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? (agentName as AgentKey) : 'reviewer');
+  writePersonaFile(delegatedWorkingDirectory, agentName, spec.persona);
 
   if (parsed.mirror_repo) {
     try {
-      mirrorRepoIfRequested(cwd, workdir, true);
+      mirrorRepoIfRequested(requestWorkingDirectory, delegatedWorkingDirectory, true);
     } catch (error) {
       return {
         ok: false,
@@ -415,16 +419,16 @@ async function executeDelegation(
         stderr:
           `Failed to mirror repo into temp dir: ${String(error)}. ` +
           'Consider disabling mirroring or using git worktree (see docs).',
-        working_dir: workdir,
+        working_dir: delegatedWorkingDirectory,
       } as const;
     }
   }
 
-  const execCwd = parsed.mirror_repo ? workdir : cwd;
+  const execWorkingDirectory = parsed.mirror_repo ? delegatedWorkingDirectory : requestWorkingDirectory;
   const args = ['exec', '--profile', spec.profile, parsed.task];
-  const result = await run('codex', args, execCwd);
+  const result = await run('codex', args, execWorkingDirectory);
 
-  finalizeStep(parsed, cwd, stepId, result);
+  finalizeStep(parsed, requestWorkingDirectory, stepId, result);
 
   const commandSucceeded = result.code === 0;
   const hasOutput = result.stdout.trim().length > 0;
@@ -435,7 +439,7 @@ async function executeDelegation(
     code: result.code,
     stdout: result.stdout.trim(),
     stderr: result.stderr.trim(),
-    working_dir: workdir,
+    working_dir: delegatedWorkingDirectory,
   } as const;
 }
 
@@ -462,10 +466,10 @@ export async function delegateHandler(params: unknown) {
   const resolved = ensureAgentResolved(agentName, parsed);
   if (resolved.failure) return resolved.failure;
 
-  return executeDelegation(parsed, context.cwd, agentName, resolved.spec, resolved.isConfigured);
+  return executeDelegation(parsed, context.workingDirectory, agentName, resolved.spec, resolved.isConfigured);
 }
 
-function recordRunningStep(params: DelegateParams, cwd: string): string | undefined {
+function recordRunningStep(params: DelegateParams, requestWorkingDirectory: string): string | undefined {
   const isDelegatedTask = params.agent !== 'orchestrator';
   const hasOrchestratorToken = params.token === ORCHESTRATOR_TOKEN;
   const hasRequestId = Boolean(params.request_id);
@@ -474,24 +478,29 @@ function recordRunningStep(params: DelegateParams, cwd: string): string | undefi
   if (!hasRequestId) return undefined;
 
   const requestId = params.request_id as string;
-  const todo = loadTodo(requestId, cwd);
+  const todo = loadTodo(requestId, requestWorkingDirectory);
   const title = params.task.split('\n')[0].slice(0, 80);
   const step = appendStep(todo, {
     title,
-    agent: params.agent,
+    requested_agent: params.agent,
     status: 'running',
     started_at: new Date().toISOString(),
   });
-  saveTodo(todo, cwd);
+  saveTodo(todo, requestWorkingDirectory);
   return step.id;
 }
 
-function finalizeStep(params: DelegateParams, cwd: string, stepId: string | undefined, result: { code: number; stdout: string; stderr: string }) {
+function finalizeStep(
+  params: DelegateParams,
+  requestWorkingDirectory: string,
+  stepId: string | undefined,
+  result: { code: number; stdout: string; stderr: string },
+) {
   if (!stepId) return;
   if (!params.request_id) return;
 
-  const todo = loadTodo(params.request_id, cwd);
-  const stepDir = join(cwd, 'orchestration', params.request_id, 'steps', stepId);
+  const todo = loadTodo(params.request_id, requestWorkingDirectory);
+  const stepDir = join(requestWorkingDirectory, 'orchestration', params.request_id, 'steps', stepId);
   mkdirSync(stepDir, { recursive: true });
   writeFileSync(join(stepDir, 'stdout.txt'), result.stdout, 'utf8');
   writeFileSync(join(stepDir, 'stderr.txt'), result.stderr, 'utf8');
@@ -501,7 +510,7 @@ function finalizeStep(params: DelegateParams, cwd: string, stepId: string | unde
     stdout_path: join('steps', stepId, 'stdout.txt'),
     stderr_path: join('steps', stepId, 'stderr.txt'),
   });
-  saveTodo(todo, cwd);
+  saveTodo(todo, requestWorkingDirectory);
 }
 
 export async function delegateBatchHandler(params: unknown) {
@@ -862,7 +871,7 @@ function inspectAgentFile(entry: string, dir: string): ValidationFileResult | nu
       agentName = basename(entry, '.md');
       const raw = readFileSync(full, 'utf8');
       const { attrs, body } = parseFrontmatter(raw);
-      const profile = (attrs.profile || attrs.agent_profile || '').trim();
+      const profile = (attrs.profile || '').trim();
       if (!profile) issues.push({ level: 'warning', code: 'missing_profile', field: 'profile', message: 'profile missing; built-in loader defaults to default' });
       parsed.profile = profile || 'default';
       const approvalPolicyValue = attrs.approval_policy?.trim();

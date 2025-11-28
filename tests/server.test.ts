@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DelegateParamsSchema, prepareWorkdir, mirrorRepoIfRequested, run, loadAgentsFromDir, validateAgents } from '../src/codex-subagents.mcp';
+import { DelegateParamsSchema, prepareWorkingDirectory, mirrorRepoIfRequested, run, loadAgentsFromDir, validateAgents } from '../src/codex-subagents.mcp';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -16,9 +16,9 @@ describe('Zod validation', () => {
   });
 });
 
-describe('Workdir creation', () => {
+describe('Working directory creation', () => {
   it('creates a temp directory and keeps it for inspection', () => {
-    const workingDir = prepareWorkdir('reviewer');
+    const workingDir = prepareWorkingDirectory('reviewer');
     expect(existsSync(workingDir)).toBe(true);
   });
 });
