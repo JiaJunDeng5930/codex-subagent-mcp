@@ -127,7 +127,7 @@ Note: MCP servers run outside Codex’s sandbox. Keep surfaces narrow and audite
 - `agent` (what you pass to `subagents.delegate`): the name of an agent loaded from your registry directory. The name is the file basename, e.g., `agents/review.md` → agent `review`.
 - `profile` (Codex CLI): an execution profile you define in `~/.codex/config.toml` under `[profiles.<name>]`. Agents typically specify which profile to use via frontmatter (`profile: <name>`), but agent names and profile names don’t have to match.
 
-There are no hardcoded built‑in agent names. The server loads agents from disk (`agents/*.md|*.json`) or accepts an ad‑hoc agent when both `persona` and `profile` are provided inline.
+只有 orchestrator 是内置的，用于引导路由；其他代理均从磁盘加载（`agents/*.md|*.json`），或在调用时同时提供 `persona` 与 `profile` 作为内联定义。
 
 ## Tool: `delegate`
 

@@ -23,7 +23,7 @@ const START_TIME = Date.now();
 export const ORCHESTRATOR_TOKEN = randomBytes(16).toString('hex');
 
 // Personas and profiles
-type AgentKey = 'reviewer' | 'debugger' | 'security'; // TODO: 考虑将内置的 subagent 换成 orchestrator，删掉 reviewer、debugger、security 这三个。
+type AgentKey = 'orchestrator';
 export type ApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type AgentSpec = {
@@ -34,53 +34,19 @@ export type AgentSpec = {
 };
 
 export const AGENTS: Record<AgentKey, AgentSpec> = {
-  reviewer: {
-    profile: 'reviewer',
+  orchestrator: {
+    profile: 'default',
+    approval_policy: 'on-request',
+    sandbox_mode: 'workspace-write',
     persona:
       [
-        'You are a senior code reviewer focused on clarity and maintainability.',
-        'Goals: readability, naming, structure, tests, error handling, security, performance.',
-        'Method:',
-        '- Skim repo structure; identify affected modules.',
-        '- Review diffs and hotspots; note risks and complexity.',
-        '- Propose concrete, minimal patches with rationale.',
-        'Output:',
-        '- A prioritized list of issues (critical → nice-to-have).',
-        '- Unified diffs or file-level patches for the top items.',
-        '- Clear next steps to land improvements safely.',
-      ].join('\n'),
-  },
-  debugger: {
-    profile: 'debugger',
-    persona:
-      [
-        'You are a root-cause debugger. You prioritize reproduction and minimal fixes.',
-        'Method:',
-        '- Reproduce: identify failing tests or real-world triggers.',
-        '- Isolate: bisect, add focused assertions or logs, minimize scope.',
-        '- Fix: implement the smallest change that resolves the root cause.',
-        '- Verify: add/adjust tests; ensure no regressions.',
-        'Output:',
-        '- Root cause summary with evidence (stack traces, repro steps).',
-        '- The minimal patch (diff) and why it’s safe.',
-        '- Prevention notes (tests, lint rules, invariants).',
-      ].join('\n'),
-  },
-  security: {
-    profile: 'security',
-    persona:
-      [
-        'You are a pragmatic security auditor for application code.',
-        'Scope: secret exposure, unsafe shell usage, SSRF, path traversal, deserialization,',
-        'dependency risks, auth/z logic gaps, and obvious injection vectors.',
-        'Method:',
-        '- Map entry points and trust boundaries; prefer grep + codeflow inspection.',
-        '- Flag risky APIs and patterns; propose safer alternatives.',
-        '- Balance risk/effort and suggest incremental hardening steps.',
-        'Output:',
-        '- Findings with severity, impact, and exploitability.',
-        '- Concrete code changes or configs to mitigate.',
-        '- Policy/ops recommendations where relevant.',
+        'Parse [[ORCH-ENVELOPE]] JSON if present; use request_id.',
+        'Maintain and evolve a To-Do plan aligned to the user goal.',
+        'Use subagents.delegate / subagents.delegate_batch for subtasks, always passing token="<server-injected-token>" and request_id.',
+        'Prefer parallel for independent work; sequential for dependencies.',
+        'Summarize after each batch, decide next steps, stop when the user goal is achieved.',
+        'Never delegate without the token; refuse and explain if token is missing.',
+        'Non-orchestrator agents must not delegate; they perform local work only.',
       ].join('\n'),
   },
 };
@@ -157,7 +123,7 @@ export function run(
   });
 }
 
-export function prepareWorkingDirectory(agent: AgentKey): string {
+export function prepareWorkingDirectory(agent: string): string {
   return mkdtempSync(join(tmpdir(), `codex-${agent}-`));
 }
 
@@ -311,7 +277,7 @@ function resolveSandboxMode(value?: string | SandboxMode) {
 function resolveAgent(agentName: string, parsed: DelegateParams): { spec: AgentSpec | undefined; isConfigured: boolean } {
   const registryFromDisk = loadAgentsFromDir(getAgentsDir());
   const registry: Record<string, AgentSpec> = { ...AGENTS, ...registryFromDisk };
-  const configuredAgent = registry[agentName as AgentKey] ?? registry[agentName];
+  const configuredAgent = registry[agentName];
   const hasInlinePersona = Boolean(parsed.persona) && Boolean(parsed.profile);
   const adHocAgent = hasInlinePersona
     ? {
@@ -405,7 +371,7 @@ async function executeDelegation(
   isConfigured: boolean,
 ) {
   const stepId = recordRunningStep(parsed, requestWorkingDirectory);
-  const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? (agentName as AgentKey) : 'reviewer');
+  const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? agentName : 'orchestrator');
   writePersonaFile(delegatedWorkingDirectory, agentName, spec.persona);
 
   if (parsed.mirror_repo) {

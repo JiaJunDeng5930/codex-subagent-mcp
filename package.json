@@ -2,7 +2,7 @@
   "name": "codex-subagents-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "TypeScript MCP server exposing a single delegate tool to run task-specific sub-agents (review, debugger, security) for Codex CLI.",
+  "description": "TypeScript MCP server exposing a single delegate tool and orchestrator to run task-specific, file-defined sub-agents for Codex CLI.",
   "main": "dist/codex-subagents.mcp.js",
   "type": "commonjs",
   "scripts": {

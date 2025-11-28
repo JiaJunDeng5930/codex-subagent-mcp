@@ -82,7 +82,7 @@ describe('e2e multi-step tracking', () => {
     const workingDir = createTempWorkingDir();
     const routed = routeThroughOrchestrator({ agent: 'orchestrator', task: 'plan', cwd: workingDir });
     const requestId = routed.request_id;
-    await delegateHandler({ agent: 'reviewer', task: 'review-phase', token: ORCHESTRATOR_TOKEN, request_id: requestId, cwd: workingDir });
+    await delegateHandler({ agent: 'review', task: 'review-phase', token: ORCHESTRATOR_TOKEN, request_id: requestId, cwd: workingDir });
     await delegateHandler({ agent: 'debugger', task: 'debug-phase', token: ORCHESTRATOR_TOKEN, request_id: requestId, cwd: workingDir });
     await delegateHandler({ agent: 'security', task: 'security-phase', token: ORCHESTRATOR_TOKEN, request_id: requestId, cwd: workingDir });
     const todo = loadTodo(requestId, workingDir);

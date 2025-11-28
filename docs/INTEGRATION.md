@@ -137,4 +137,4 @@ This avoids copying and gives isolation without rewriting in-place state. You ca
 - Agent: Name resolved from your registry files (`agents/<name>.md|json`). Example: `agents/review.md` registers agent `review`.
 - Profile: Codex CLI execution profile (`~/.codex/config.toml` under `[profiles.<name>]`). Agents can declare a `profile` in frontmatter to select which profile Codex should use when delegating.
 
-Agents are loaded from disk (or constructed ad‑hoc by passing both `persona` and `profile` inline). There are no hardcoded built‑in agent names.
+只有 orchestrator 是内置的；其他代理需从磁盘加载（`agents/*.md|*.json`）或在调用时同时提供 `persona` 与 `profile` 作为内联定义。
