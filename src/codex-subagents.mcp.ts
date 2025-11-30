@@ -265,8 +265,9 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
 
 function loadAgentDirectory(fullPath: string, entry: string) {
   const agentName = entry;
-  const mdPath = join(fullPath, `${agentName}.md`);
-  const jsonPath = join(fullPath, `${agentName}.json`);
+  const resourceDir = resolve(fullPath);
+  const mdPath = join(resourceDir, `${agentName}.md`);
+  const jsonPath = join(resourceDir, `${agentName}.json`);
   const hasMd = existsSync(mdPath);
   const hasJson = existsSync(jsonPath);
   if (!hasMd && !hasJson) {
@@ -280,11 +281,11 @@ function loadAgentDirectory(fullPath: string, entry: string) {
 
   if (hasMd) {
     const parsed = loadMarkdownAgent(mdPath, `${agentName}.md`);
-    return { name: parsed.name, spec: { ...parsed.spec, resourceDir: fullPath } };
+    return { name: parsed.name, spec: { ...parsed.spec, resourceDir } };
   }
 
-  const parsed = loadJsonAgent(jsonPath, fullPath, `${agentName}.json`);
-  if (parsed) return { name: parsed.name, spec: { ...parsed.spec, resourceDir: fullPath } };
+  const parsed = loadJsonAgent(jsonPath, resourceDir, `${agentName}.json`);
+  if (parsed) return { name: parsed.name, spec: { ...parsed.spec, resourceDir } };
   return null;
 }
 
@@ -917,8 +918,9 @@ function inspectAgentFile(entry: string, dir: string): ValidationFileResult | nu
 
 function inspectDirectoryAgent(params: { dirPath: string; agentName: string; fileLabel: string }): ValidationFileResult {
   const { dirPath, agentName, fileLabel } = params;
-  const mdPath = join(dirPath, `${agentName}.md`);
-  const jsonPath = join(dirPath, `${agentName}.json`);
+  const resourceDir = resolve(dirPath);
+  const mdPath = join(resourceDir, `${agentName}.md`);
+  const jsonPath = join(resourceDir, `${agentName}.json`);
   const hasMd = existsSync(mdPath);
   const hasJson = existsSync(jsonPath);
   const issues: ValidationIssue[] = [];
@@ -936,11 +938,11 @@ function inspectDirectoryAgent(params: { dirPath: string; agentName: string; fil
 
   if (hasMd) {
     const result = validateMarkdownAgent(mdPath);
-    return buildValidationResult(fileLabel, agentName, { ...result, parsed: { ...result.parsed, resourceDir: dirPath } });
+    return buildValidationResult(fileLabel, agentName, { ...result, parsed: { ...result.parsed, resourceDir } });
   }
 
-  const result = validateJsonAgent(jsonPath, dirPath);
-  return buildValidationResult(fileLabel, agentName, { ...result, parsed: { ...result.parsed, resourceDir: dirPath } });
+  const result = validateJsonAgent(jsonPath, resourceDir);
+  return buildValidationResult(fileLabel, agentName, { ...result, parsed: { ...result.parsed, resourceDir } });
 }
 
 function validateMarkdownAgent(fullPath: string): { issues: ValidationIssue[]; parsed: Partial<AgentSpec> & { persona_length?: number } } {
