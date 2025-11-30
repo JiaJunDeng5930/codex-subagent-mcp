@@ -1,10 +1,5 @@
 # codex-subagents-mcp
 
-[![CI](https://github.com/leonardsellem/codex-subagents-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/leonardsellem/codex-subagents-mcp/actions/workflows/ci.yml)
-![Node >=18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
-![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![GitHub stars](https://img.shields.io/github/stars/leonardsellem/codex-subagents-mcp?style=social)
-
 File‑based sub‑agents for Codex CLI. One MCP tool. Zero fluff.
 
 本仓库在 MIT 许可下基于原项目 https://github.com/leonardsellem/codex-subagents-mcp 进行了大幅修改后独立维护，当前不计划同步上游代码。
