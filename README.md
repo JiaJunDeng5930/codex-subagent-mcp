@@ -135,9 +135,9 @@ Note: MCP servers run outside Codex’s sandbox. Keep surfaces narrow and audite
   - `mirror_repo?`: boolean (default false). If true and `cwd` provided, mirrors the repo into the temp workdir for maximal isolation.
   - `profile?` and `persona?`: optional ad-hoc definition when `agent` is not found in registry. Provide both.
 - Behavior:
-  1. Creates a temp workdir; writes `AGENTS.md` with the agent persona.
-  2. Optionally mirrors the repo into the temp dir via `cp -R` fast path.
-     - Safer alternative (recommended for large repos): `git worktree add <tempdir> <branch-or-HEAD>` (documented in `docs/INTEGRATION.md`).
+  1. If `mirror_repo` is true: creates a temp workdir, mirrors the repo, writes `AGENTS.md` with the persona plus a resources hint for directory-style agents.
+  2. If `mirror_repo` is false: no temp dir; persona (and resources hint, if any) are prefixed to the task text; `working_dir` echoes the provided `cwd`/`process.cwd()`.
+  - Safer alternative (recommended for large repos): `git worktree add <tempdir> <branch-or-HEAD>` (documented in `docs/INTEGRATION.md`).
   3. Spawns `codex exec --profile <agent-profile> "<task>"` with `cwd` set to the temp dir if mirrored, else your provided `cwd`.
   4. Returns JSON: `{ ok, code, stdout, stderr, working_dir }`.
 
@@ -177,6 +177,8 @@ Or JSON `agents/migrations.json`:
   "personaFile": null
 }
 ```
+
+- Directory-style agents: place files under `agents/<name>/` with a mandatory persona file named `<name>.md` (frontmatter + body) or `<name>.json` (profile + persona/personaFile). Other files stay alongside; the server does not copy them but surfaces their absolute path to the agent (in `AGENTS.md` when mirrored; prefixed to the task when not mirrored).
 
 2. Ad-hoc agent via tool params
 

@@ -42,6 +42,7 @@ Required: `profile`, `persona`. Optional: `approval_policy`, `sandbox_mode`.
 - Align metadata with Codex profiles you run under; enforce behavior in `~/.codex/config.toml`.
 - Keep personas short, specific, and action‑biased; prefer concrete checklists over philosophy.
  - See also: `docs/OPERATIONS.md`.
+- 目录式代理：可以使用 `agents/<name>/`，其中必须包含 `<name>.md`（frontmatter+正文）或 `<name>.json`（profile+persona/personaFile）。同目录下其他文件不会被复制，但会以绝对路径提示给子代理：`mirror_repo=true` 时写入临时目录的 `AGENTS.md`，`mirror_repo=false` 时前置拼接到传入 task。
 
 ## Usage Hint
 

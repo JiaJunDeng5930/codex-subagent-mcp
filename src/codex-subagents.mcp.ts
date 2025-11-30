@@ -32,6 +32,7 @@ export type AgentSpec = {
   persona: string;
   approval_policy?: ApprovalPolicy;
   sandbox_mode?: SandboxMode;
+  resourceDir?: string;
 };
 
 export const AGENTS: Record<AgentKey, AgentSpec> = {
@@ -128,9 +129,22 @@ export function prepareWorkingDirectory(agent: string): string {
   return mkdtempSync(join(tmpdir(), `codex-${agent}-`));
 }
 
-export function writePersonaFile(workingDirectory: string, agentName: string, persona: string): void {
+export function writePersonaFile(workingDirectory: string, agentName: string, persona: string, resourceDir?: string): void {
   const header = `# Persona: ${agentName}\n\n`;
-  writeFileSync(join(workingDirectory, 'AGENTS.md'), `${header}${persona.trim()}\n`, 'utf8');
+  const blocks = [header, persona.trim(), '\n'];
+  if (resourceDir) {
+    blocks.push('[[RESOURCES]]\n', `${resourceDir}\n`);
+  }
+  writeFileSync(join(workingDirectory, 'AGENTS.md'), blocks.join(''), 'utf8');
+}
+
+export function buildTaskWithPersonaAndResources(params: { persona: string; resourceDir?: string; originalTask: string }): string {
+  const blocks = ['[[PERSONA]]', params.persona.trim()];
+  if (params.resourceDir) {
+    blocks.push('[[RESOURCES]]', params.resourceDir);
+  }
+  blocks.push('[[TASK]]', params.originalTask);
+  return blocks.join('\n');
 }
 
 export function mirrorRepoIfRequested(sourceWorkingDirectory: string | undefined, destinationWorkingDirectory: string, mirror: boolean): void {
@@ -228,7 +242,11 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
   for (const entry of readdirSync(dir)) {
     try {
       const full = join(dir, entry);
-      if (statSync(full).isDirectory()) continue;
+      if (statSync(full).isDirectory()) {
+        const parsedDir = loadAgentDirectory(full, entry);
+        if (parsedDir) out[parsedDir.name] = parsedDir.spec;
+        continue;
+      }
 
       if (entry.endsWith('.md')) {
         const parsed = loadMarkdownAgent(full, entry);
@@ -243,6 +261,31 @@ export function loadAgentsFromDir(dir?: string): Record<string, AgentSpec> {
     }
   }
   return out;
+}
+
+function loadAgentDirectory(fullPath: string, entry: string) {
+  const agentName = entry;
+  const mdPath = join(fullPath, `${agentName}.md`);
+  const jsonPath = join(fullPath, `${agentName}.json`);
+  const hasMd = existsSync(mdPath);
+  const hasJson = existsSync(jsonPath);
+  if (!hasMd && !hasJson) {
+    console.error(`Persona file not found for agent directory: ${agentName}`);
+    return null;
+  }
+  if (hasMd && hasJson) {
+    console.error(`Multiple persona files found for agent directory: ${agentName}`);
+    return null;
+  }
+
+  if (hasMd) {
+    const parsed = loadMarkdownAgent(mdPath, `${agentName}.md`);
+    return { name: parsed.name, spec: { ...parsed.spec, resourceDir: fullPath } };
+  }
+
+  const parsed = loadJsonAgent(jsonPath, fullPath, `${agentName}.json`);
+  if (parsed) return { name: parsed.name, spec: { ...parsed.spec, resourceDir: fullPath } };
+  return null;
 }
 
 function loadMarkdownAgent(fullPath: string, entry: string) {
@@ -281,16 +324,17 @@ function loadJsonPersona(agentConfig: Partial<AgentSpec> & { personaFile?: strin
   return readFileSync(path, 'utf8');
 }
 
+const ALLOWED_APPROVAL_POLICIES: ApprovalPolicy[] = ['never', 'on-request', 'on-failure', 'untrusted'];
+const ALLOWED_SANDBOX_MODES: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
+
 function resolveApprovalPolicy(value?: string | ApprovalPolicy) {
   if (!value) return undefined;
-  const allowed: ApprovalPolicy[] = ['never', 'on-request', 'on-failure', 'untrusted'];
-  return allowed.includes(value as ApprovalPolicy) ? (value as ApprovalPolicy) : undefined;
+  return ALLOWED_APPROVAL_POLICIES.includes(value as ApprovalPolicy) ? (value as ApprovalPolicy) : undefined;
 }
 
 function resolveSandboxMode(value?: string | SandboxMode) {
   if (!value) return undefined;
-  const allowed: SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
-  return allowed.includes(value as SandboxMode) ? (value as SandboxMode) : undefined;
+  return ALLOWED_SANDBOX_MODES.includes(value as SandboxMode) ? (value as SandboxMode) : undefined;
 }
 
 function resolveAgent(agentName: string, parsed: DelegateParams): { spec: AgentSpec | undefined; isConfigured: boolean } {
@@ -390,41 +434,48 @@ async function executeDelegation(
   isConfigured: boolean,
 ) {
   const stepId = recordRunningStep(parsed, requestWorkingDirectory);
-  const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? agentName : 'orchestrator');
-  writePersonaFile(delegatedWorkingDirectory, agentName, spec.persona);
-
   if (parsed.mirror_repo) {
+    const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? agentName : 'orchestrator');
     try {
       mirrorRepoIfRequested(requestWorkingDirectory, delegatedWorkingDirectory, true);
     } catch (error) {
-      return {
-        ok: false,
-        code: 1,
-        stdout: '',
-        stderr:
-          `Failed to mirror repo into temp dir: ${String(error)}. ` +
-          'Consider disabling mirroring or using git worktree (see docs).',
-        working_dir: delegatedWorkingDirectory,
-      } as const;
+      return buildDelegationResponse({
+        result: {
+          code: 1,
+          stdout: '',
+          stderr:
+            `Failed to mirror repo into temp dir: ${String(error)}. ` +
+            'Consider disabling mirroring or using git worktree (see docs).',
+        },
+        workingDir: delegatedWorkingDirectory,
+      });
     }
+    writePersonaFile(delegatedWorkingDirectory, agentName, spec.persona, spec.resourceDir);
+    const args = ['exec', '--profile', spec.profile, parsed.task];
+    const result = await run('codex', args, delegatedWorkingDirectory);
+    finalizeStep(parsed, requestWorkingDirectory, stepId, result);
+    return buildDelegationResponse({ result, workingDir: delegatedWorkingDirectory });
   }
 
-  const execWorkingDirectory = parsed.mirror_repo ? delegatedWorkingDirectory : requestWorkingDirectory;
-  const args = ['exec', '--profile', spec.profile, parsed.task];
-  const result = await run('codex', args, execWorkingDirectory);
-
+  const task = buildTaskWithPersonaAndResources({ persona: spec.persona, resourceDir: spec.resourceDir, originalTask: parsed.task });
+  const args = ['exec', '--profile', spec.profile, task];
+  const result = await run('codex', args, requestWorkingDirectory);
   finalizeStep(parsed, requestWorkingDirectory, stepId, result);
+  return buildDelegationResponse({ result, workingDir: requestWorkingDirectory });
+}
 
-  const commandSucceeded = result.code === 0;
-  const hasOutput = result.stdout.trim().length > 0;
+function buildDelegationResponse(params: { result: { code: number; stdout: string; stderr: string }; workingDir: string }) {
+  const commandSucceeded = params.result.code === 0;
+  const trimmedStdout = params.result.stdout.trim();
+  const trimmedStderr = params.result.stderr.trim();
+  const hasOutput = trimmedStdout.length > 0;
   const succeededWithOutput = commandSucceeded && hasOutput;
-
   return {
     ok: succeededWithOutput,
-    code: result.code,
-    stdout: result.stdout.trim(),
-    stderr: result.stderr.trim(),
-    working_dir: delegatedWorkingDirectory,
+    code: params.result.code,
+    stdout: trimmedStdout,
+    stderr: trimmedStderr,
+    working_dir: params.workingDir,
   } as const;
 }
 
@@ -845,81 +896,138 @@ type ValidationFileResult = {
 
 function inspectAgentFile(entry: string, dir: string): ValidationFileResult | null {
   const full = join(dir, entry);
-  if (statSync(full).isDirectory()) return null;
+  const isDirectory = statSync(full).isDirectory();
+  const fileLabel = isDirectory ? `${entry}/` : entry;
 
+  if (isDirectory) {
+    return inspectDirectoryAgent({ dirPath: full, agentName: entry, fileLabel });
+  }
+  if (entry.endsWith('.md')) {
+    const agentName = basename(entry, '.md');
+    return buildValidationResult(fileLabel, agentName, validateMarkdownAgent(full));
+  }
+  if (entry.endsWith('.json')) {
+    const agentName = basename(entry, '.json');
+    return buildValidationResult(fileLabel, agentName, validateJsonAgent(full, dir));
+  }
+
+  const issues: ValidationIssue[] = [{ level: 'warning', code: 'unsupported_extension', message: `Skipping unsupported file: ${entry}` }];
+  return buildValidationResult(fileLabel, undefined, { issues, parsed: {} });
+}
+
+function inspectDirectoryAgent(params: { dirPath: string; agentName: string; fileLabel: string }): ValidationFileResult {
+  const { dirPath, agentName, fileLabel } = params;
+  const mdPath = join(dirPath, `${agentName}.md`);
+  const jsonPath = join(dirPath, `${agentName}.json`);
+  const hasMd = existsSync(mdPath);
+  const hasJson = existsSync(jsonPath);
   const issues: ValidationIssue[] = [];
   const parsed: Partial<AgentSpec> & { persona_length?: number } = {};
-  let agentName: string | undefined;
 
+  if (!hasMd && !hasJson) {
+    issues.push({ level: 'error', code: 'missing_persona', field: 'persona', message: `Persona file not found: ${mdPath} or ${jsonPath}` });
+    return buildValidationResult(fileLabel, agentName, { issues, parsed });
+  }
+
+  if (hasMd && hasJson) {
+    issues.push({ level: 'error', code: 'multiple_persona_files', message: `Multiple persona files found in ${agentName}` });
+    return buildValidationResult(fileLabel, agentName, { issues, parsed });
+  }
+
+  if (hasMd) {
+    const result = validateMarkdownAgent(mdPath);
+    return buildValidationResult(fileLabel, agentName, { ...result, parsed: { ...result.parsed, resourceDir: dirPath } });
+  }
+
+  const result = validateJsonAgent(jsonPath, dirPath);
+  return buildValidationResult(fileLabel, agentName, { ...result, parsed: { ...result.parsed, resourceDir: dirPath } });
+}
+
+function validateMarkdownAgent(fullPath: string): { issues: ValidationIssue[]; parsed: Partial<AgentSpec> & { persona_length?: number } } {
+  const issues: ValidationIssue[] = [];
+  const parsed: Partial<AgentSpec> & { persona_length?: number } = {};
   try {
-    if (entry.endsWith('.md')) {
-      agentName = basename(entry, '.md');
-      const raw = readFileSync(full, 'utf8');
-      const { attrs, body } = parseFrontmatter(raw);
-      const profile = (attrs.profile || '').trim();
-      if (!profile) issues.push({ level: 'warning', code: 'missing_profile', field: 'profile', message: 'profile missing; built-in loader defaults to default' });
-      parsed.profile = profile || 'default';
-      const approvalPolicyValue = attrs.approval_policy?.trim();
-      const sandboxModeValue = attrs.sandbox_mode?.trim();
-      if (approvalPolicyValue && !['never', 'on-request', 'on-failure', 'untrusted'].includes(approvalPolicyValue)) {
-        issues.push({ level: 'error', code: 'invalid_approval_policy', field: 'approval_policy', message: `Invalid approval_policy: ${approvalPolicyValue}` });
-      } else if (approvalPolicyValue) parsed.approval_policy = approvalPolicyValue as ApprovalPolicy;
-      if (sandboxModeValue && !['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxModeValue)) {
-        issues.push({ level: 'error', code: 'invalid_sandbox_mode', field: 'sandbox_mode', message: `Invalid sandbox_mode: ${sandboxModeValue}` });
-      } else if (sandboxModeValue) parsed.sandbox_mode = sandboxModeValue as SandboxMode;
-      const persona = body.trim();
-      if (!persona) issues.push({ level: 'error', code: 'empty_persona', field: 'persona', message: 'Persona body is empty' });
+    const raw = readFileSync(fullPath, 'utf8');
+    const { attrs, body } = parseFrontmatter(raw);
+    const profile = (attrs.profile || '').trim();
+    if (!profile) issues.push({ level: 'warning', code: 'missing_profile', field: 'profile', message: 'profile missing; built-in loader defaults to default' });
+    parsed.profile = profile || 'default';
+    const approvalPolicyValue = attrs.approval_policy?.trim();
+    const sandboxModeValue = attrs.sandbox_mode?.trim();
+    if (approvalPolicyValue && !ALLOWED_APPROVAL_POLICIES.includes(approvalPolicyValue as ApprovalPolicy)) {
+      issues.push({ level: 'error', code: 'invalid_approval_policy', field: 'approval_policy', message: `Invalid approval_policy: ${approvalPolicyValue}` });
+    } else if (approvalPolicyValue) parsed.approval_policy = approvalPolicyValue as ApprovalPolicy;
+    if (sandboxModeValue && !ALLOWED_SANDBOX_MODES.includes(sandboxModeValue as SandboxMode)) {
+      issues.push({ level: 'error', code: 'invalid_sandbox_mode', field: 'sandbox_mode', message: `Invalid sandbox_mode: ${sandboxModeValue}` });
+    } else if (sandboxModeValue) parsed.sandbox_mode = sandboxModeValue as SandboxMode;
+    const persona = body.trim();
+    if (!persona) issues.push({ level: 'error', code: 'empty_persona', field: 'persona', message: 'Persona body is empty' });
+    parsed.persona = persona;
+    parsed.persona_length = persona.length;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    issues.push({ level: 'error', code: 'unhandled', message: msg });
+  }
+  return { issues, parsed };
+}
+
+function validateJsonAgent(
+  fullPath: string,
+  personaBaseDir: string,
+): { issues: ValidationIssue[]; parsed: Partial<AgentSpec> & { persona_length?: number } } {
+  const issues: ValidationIssue[] = [];
+  const parsed: Partial<AgentSpec> & { persona_length?: number } = {};
+  type JsonAgent = {
+    profile?: unknown;
+    approval_policy?: unknown;
+    sandbox_mode?: unknown;
+    persona?: unknown;
+    personaFile?: unknown;
+  };
+  try {
+    const jsonAgent = JSON.parse(readFileSync(fullPath, 'utf8')) as JsonAgent;
+    const profile = String((jsonAgent.profile as string | undefined) || '').trim();
+    if (!profile) issues.push({ level: 'error', code: 'missing_profile', field: 'profile', message: 'profile is required' });
+    else parsed.profile = profile;
+    const approvalPolicyValue = jsonAgent.approval_policy as string | undefined;
+    const sandboxModeValue = jsonAgent.sandbox_mode as string | undefined;
+    if (approvalPolicyValue && !ALLOWED_APPROVAL_POLICIES.includes(approvalPolicyValue as ApprovalPolicy)) {
+      issues.push({ level: 'error', code: 'invalid_approval_policy', field: 'approval_policy', message: `Invalid approval_policy: ${approvalPolicyValue}` });
+    } else if (approvalPolicyValue) parsed.approval_policy = approvalPolicyValue as ApprovalPolicy;
+    if (sandboxModeValue && !ALLOWED_SANDBOX_MODES.includes(sandboxModeValue as SandboxMode)) {
+      issues.push({ level: 'error', code: 'invalid_sandbox_mode', field: 'sandbox_mode', message: `Invalid sandbox_mode: ${sandboxModeValue}` });
+    } else if (sandboxModeValue) parsed.sandbox_mode = sandboxModeValue as SandboxMode;
+    let persona: string | undefined = typeof jsonAgent.persona === 'string' ? (jsonAgent.persona as string) : undefined;
+    if (!persona && jsonAgent.personaFile) {
+      const personaPath = join(personaBaseDir, String(jsonAgent.personaFile));
+      if (!existsSync(personaPath)) {
+        issues.push({ level: 'error', code: 'persona_file_missing', field: 'personaFile', message: `personaFile not found: ${personaPath}` });
+      } else {
+        persona = readFileSync(personaPath, 'utf8');
+      }
+    }
+    if (!persona || !persona.trim()) {
+      issues.push({ level: 'error', code: 'missing_persona', field: 'persona', message: 'persona or personaFile is required and must be non-empty' });
+    } else {
       parsed.persona = persona;
       parsed.persona_length = persona.length;
-    } else if (entry.endsWith('.json')) {
-      agentName = basename(entry, '.json');
-      type JsonAgent = {
-        profile?: unknown;
-        approval_policy?: unknown;
-        sandbox_mode?: unknown;
-        persona?: unknown;
-        personaFile?: unknown;
-      };
-      const jsonAgent = JSON.parse(readFileSync(full, 'utf8')) as JsonAgent;
-      const profile = String((jsonAgent.profile as string | undefined) || '').trim();
-      if (!profile) issues.push({ level: 'error', code: 'missing_profile', field: 'profile', message: 'profile is required' });
-      else parsed.profile = profile;
-      const approvalPolicyValue = jsonAgent.approval_policy as string | undefined;
-      const sandboxModeValue = jsonAgent.sandbox_mode as string | undefined;
-      if (approvalPolicyValue && !['never', 'on-request', 'on-failure', 'untrusted'].includes(approvalPolicyValue)) {
-        issues.push({ level: 'error', code: 'invalid_approval_policy', field: 'approval_policy', message: `Invalid approval_policy: ${approvalPolicyValue}` });
-      } else if (approvalPolicyValue) parsed.approval_policy = approvalPolicyValue as ApprovalPolicy;
-      if (sandboxModeValue && !['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxModeValue)) {
-        issues.push({ level: 'error', code: 'invalid_sandbox_mode', field: 'sandbox_mode', message: `Invalid sandbox_mode: ${sandboxModeValue}` });
-      } else if (sandboxModeValue) parsed.sandbox_mode = sandboxModeValue as SandboxMode;
-      let persona: string | undefined = typeof jsonAgent.persona === 'string' ? (jsonAgent.persona as string) : undefined;
-      if (!persona && jsonAgent.personaFile) {
-        const personaPath = join(dir, String(jsonAgent.personaFile));
-        if (!existsSync(personaPath)) {
-          issues.push({ level: 'error', code: 'persona_file_missing', field: 'personaFile', message: `personaFile not found: ${personaPath}` });
-        } else {
-          persona = readFileSync(personaPath, 'utf8');
-        }
-      }
-      if (!persona || !persona.trim()) {
-        issues.push({ level: 'error', code: 'missing_persona', field: 'persona', message: 'persona or personaFile is required and must be non-empty' });
-      } else {
-        parsed.persona = persona;
-        parsed.persona_length = persona.length;
-      }
-    } else {
-      issues.push({ level: 'warning', code: 'unsupported_extension', message: `Skipping unsupported file: ${entry}` });
     }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     issues.push({ level: 'error', code: 'unhandled', message: msg });
   }
-
-  const errors = issues.filter(i => i.level === 'error').length;
-  const warnings = issues.filter(i => i.level === 'warning').length;
-  return { file: entry, agent_name: agentName, ok: errors === 0, errors, warnings, issues, parsed };
+  return { issues, parsed };
 }
 
+function buildValidationResult(
+  file: string,
+  agentName: string | undefined,
+  result: { issues: ValidationIssue[]; parsed: Partial<AgentSpec> & { persona_length?: number } },
+): ValidationFileResult {
+  const errors = result.issues.filter(i => i.level === 'error').length;
+  const warnings = result.issues.filter(i => i.level === 'warning').length;
+  return { file, agent_name: agentName, ok: errors === 0, errors, warnings, issues: result.issues, parsed: result.parsed };
+}
 export async function validateAgents(dir?: string) {
   const resolved = dir ?? getAgentsDir();
   if (!resolved) {
