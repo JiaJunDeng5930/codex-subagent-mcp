@@ -69,6 +69,20 @@ export const DelegateBatchParamsSchema = z.object({
 });
 export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 
+type DelegationMeta = {
+  ok: boolean;
+  code: number;
+  stdout: string;
+  stderr: string;
+  working_dir: string;
+};
+
+type DelegationOutcome = {
+  payload: { stdout: string };
+  meta: DelegationMeta;
+  payloadSource: 'stdout' | 'stderr' | 'empty';
+};
+
 // Spawn helper
 function buildSanitizedEnv(base: NodeJS.ProcessEnv = process.env) {
   const allowedKeys = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'SHELL', 'TERM', 'TMPDIR'];
@@ -396,18 +410,39 @@ function buildDelegateContext(parsed: z.infer<typeof DelegateParamsSchema>): Del
   };
 }
 
+function buildDelegationOutcome(params: { result: { code: number; stdout: string; stderr: string }; workingDir: string }): DelegationOutcome {
+  const trimmedStdout = params.result.stdout.trim();
+  const trimmedStderr = params.result.stderr.trim();
+  const payloadSource = trimmedStdout.length > 0 ? 'stdout' : trimmedStderr.length > 0 ? 'stderr' : 'empty';
+  const payloadStdout = payloadSource === 'stdout' ? trimmedStdout : payloadSource === 'stderr' ? trimmedStderr : '';
+  const ok = params.result.code === 0 && trimmedStdout.length > 0;
+  const meta: DelegationMeta = {
+    ok,
+    code: params.result.code,
+    stdout: trimmedStdout,
+    stderr: trimmedStderr,
+    working_dir: params.workingDir,
+  };
+  return { payload: { stdout: payloadStdout }, meta, payloadSource };
+}
+
 function ensureAgentResolved(agentName: string, parsed: DelegateParams) {
   const { spec, isConfigured } = resolveAgent(agentName, parsed);
   if (!spec) {
+    const message =
+      `Unknown agent: ${agentName}. Create agents/<name>.md or pass persona+profile inline. ` +
+      'See README.md “Custom agents”.';
     return {
       failure: {
-        ok: false,
-        code: 2,
-        stdout: '',
-        stderr:
-          `Unknown agent: ${agentName}. Create agents/<name>.md or pass persona+profile inline. ` +
-          'See README.md “Custom agents”.',
-        working_dir: '',
+        payload: { stdout: message },
+        meta: {
+          ok: false,
+          code: 2,
+          stdout: message,
+          stderr: message,
+          working_dir: '',
+        },
+        payloadSource: 'stderr',
       } as const,
       spec: undefined,
       isConfigured: false,
@@ -432,7 +467,7 @@ async function executeDelegation(
       mirrorRepoIfRequested(requestWorkingDirectory, delegatedWorkingDirectory, true);
     } catch (error) {
       logEvent('delegate_error', { agent: agentName, reason: String(error), working_dir: delegatedWorkingDirectory }, 'error');
-      return buildDelegationResponse({
+      return buildDelegationOutcome({
         result: {
           code: 1,
           stdout: '',
@@ -484,25 +519,10 @@ async function executeDelegation(
     },
     result.code === 0 ? 'info' : 'error',
   );
-  return buildDelegationResponse({ result, workingDir });
+  return buildDelegationOutcome({ result, workingDir });
 }
 
-function buildDelegationResponse(params: { result: { code: number; stdout: string; stderr: string }; workingDir: string }) {
-  const commandSucceeded = params.result.code === 0;
-  const trimmedStdout = params.result.stdout.trim();
-  const trimmedStderr = params.result.stderr.trim();
-  const hasOutput = trimmedStdout.length > 0;
-  const succeededWithOutput = commandSucceeded && hasOutput;
-  return {
-    ok: succeededWithOutput,
-    code: params.result.code,
-    stdout: trimmedStdout,
-    stderr: trimmedStderr,
-    working_dir: params.workingDir,
-  } as const;
-}
-
-export async function delegateHandler(params: unknown) {
+async function delegateWithMeta(params: unknown): Promise<DelegationOutcome> {
   const parsed = DelegateParamsSchema.parse(params);
   const context = buildDelegateContext(parsed);
   logEvent('delegate_request', {
@@ -519,47 +539,63 @@ export async function delegateHandler(params: unknown) {
   const agentName = parsed.agent;
   const resolved = ensureAgentResolved(agentName, parsed);
   if (resolved.failure) {
-    logEvent('delegate_result', { agent: agentName, result: resolved.failure }, 'error');
+    logEvent(
+      'delegate_result',
+      {
+        agent: agentName,
+        ...resolved.failure.meta,
+        payload_source: resolved.failure.payloadSource,
+        payload_stdout_length: resolved.failure.payload.stdout.length,
+      },
+      'error',
+    );
     return resolved.failure;
   }
 
-  const response = await executeDelegation(parsed, context.workingDirectory, agentName, resolved.spec, resolved.isConfigured);
+  const outcome = await executeDelegation(parsed, context.workingDirectory, agentName, resolved.spec, resolved.isConfigured);
   logEvent(
     'delegate_result',
     {
       agent: agentName,
-      ok: response.ok,
-      code: response.code,
-      working_dir: response.working_dir,
-      stdout_length: response.stdout.length,
-      stderr: response.stderr,
+      ok: outcome.meta.ok,
+      code: outcome.meta.code,
+      working_dir: outcome.meta.working_dir,
+      stdout_length: outcome.meta.stdout.length,
+      payload_stdout_length: outcome.payload.stdout.length,
+      payload_source: outcome.payloadSource,
+      stderr: outcome.meta.stderr,
     },
-    response.code === 0 ? 'info' : 'error',
+    outcome.meta.code === 0 ? 'info' : 'error',
   );
-  return response;
+  return outcome;
+}
+
+export async function delegateHandler(params: unknown) {
+  const outcome = await delegateWithMeta(params);
+  return outcome.payload;
 }
 
 export async function delegateBatchHandler(params: unknown) {
   try {
     const parsed = normalizeBatchParams(params);
     logEvent('delegate_batch_request', { items: parsed.items.length });
-    const results = await Promise.allSettled(parsed.items.map((item) => delegateHandler(item)));
+    const results = await Promise.allSettled(parsed.items.map((item) => delegateWithMeta(item)));
     const payload = {
       results: results.map((result) =>
         result.status === 'fulfilled'
-          ? result.value
-          : { ok: false, code: 1, stdout: '', stderr: String(result.reason), working_dir: '' }
+          ? result.value.payload
+          : { stdout: String(result.reason ?? '') }
       ),
     };
     logEvent('delegate_batch_result', {
       items: parsed.items.length,
-      codes: payload.results.map((item) => item.code),
+      codes: results.map((result) => (result.status === 'fulfilled' ? result.value.meta.code : 1)),
     });
     return payload;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logEvent('delegate_batch_result', { error: msg }, 'error');
-    return { results: [{ ok: false, code: 1, stdout: '', stderr: msg, working_dir: '' }] };
+    return { results: [{ stdout: msg }] };
   }
 }
 

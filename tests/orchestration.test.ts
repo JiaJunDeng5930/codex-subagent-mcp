@@ -12,7 +12,7 @@ describe('delegate basics without request/token', () => {
   it('runs orchestrator agent without request metadata and does not create orchestration artifacts', async () => {
     const workingDir = createTempWorkingDir();
     const response = await delegateHandler({ agent: 'orchestrator', task: 'noop', cwd: workingDir });
-    expect(response).toHaveProperty('code');
+    expect(response).toHaveProperty('stdout');
     expect(existsSync(join(workingDir, 'orchestration'))).toBe(false);
   });
 });
@@ -27,8 +27,8 @@ describe('delegate_batch', () => {
     });
 
     expect(response.results.length).toBe(2);
-    expect(typeof response.results[0].code).toBe('number');
-    expect(typeof response.results[1].code).toBe('number');
+    expect(typeof response.results[0].stdout).toBe('string');
+    expect(typeof response.results[1].stdout).toBe('string');
   });
 
   it('accepts legacy single-item input shape', async () => {

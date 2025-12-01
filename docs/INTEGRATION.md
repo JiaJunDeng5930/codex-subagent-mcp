@@ -38,7 +38,7 @@ The MCP tool `delegate`:
 2. Writes an `AGENTS.md` persona tailored to the selected agent.
 3. Optionally mirrors the repo into the temp directory for isolation (`mirror_repo=true`).
 4. Spawns `codex exec --profile <agent-profile> "<task>"` with `cwd` set appropriately.
-5. Returns `{ ok, code, stdout, stderr, working_dir }` to the calling thread.
+5. Returns `{ stdout }` to the calling thread; exit code / stderr / working_dir are emitted to logs only.
 
 ### Custom agents
 
