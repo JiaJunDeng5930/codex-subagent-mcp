@@ -50,14 +50,15 @@ function ensureTodoInitialized(params: DelegateParams, cwd: string, request_id: 
   saveTodo(todo, cwd);
 }
 
-function buildEnvelope(params: DelegateParams, request_id: string) {
-  const payload = {
+function buildEnvelope(params: DelegateParams, request_id: string, token: string) {
+  const payload: Record<string, unknown> = {
     request_id,
     requested_agent: params.agent,
     cwd: params.cwd ?? null,
     mirror_repo: params.mirror_repo ?? false,
     profile: params.profile ?? null,
     has_persona: Boolean(params.persona),
+    token,
   };
 
   return [
@@ -110,10 +111,13 @@ export function finalize(todo: Todo, summary: string, status: 'done' | 'canceled
   todo.summary = summary;
 }
 
-export function routeThroughOrchestrator(params: DelegateParams) {
+export function routeThroughOrchestrator(params: DelegateParams, token: string) {
   const cwd = params.cwd ?? process.cwd();
+  if (!token) {
+    throw new Error('ORCHESTRATOR_TOKEN is required to route through orchestrator.');
+  }
   const request_id = params.request_id || randomUUID();
   ensureTodoInitialized(params, cwd, request_id);
-  const envelope = buildEnvelope(params, request_id);
-  return { agent: 'orchestrator', task: envelope, request_id };
+  const envelope = buildEnvelope(params, request_id, token);
+  return { agent: 'orchestrator', task: envelope, request_id, token };
 }

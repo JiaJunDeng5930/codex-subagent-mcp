@@ -12,10 +12,26 @@ function createTempWorkingDir() {
 describe('routing', () => {
   it('rewrites requests to orchestrator and persists todo metadata', () => {
     const workingDir = createTempWorkingDir();
-    const routed = routeThroughOrchestrator({ agent: 'security', task: 'scan', cwd: workingDir });
+    const routed = routeThroughOrchestrator({ agent: 'security', task: 'scan', cwd: workingDir }, ORCHESTRATOR_TOKEN);
     expect(routed.agent).toBe('orchestrator');
     const todo = loadTodo(routed.request_id, workingDir);
     expect(todo.requested_agent).toBe('security');
+  });
+
+  it('throws when orchestrator token is missing', () => {
+    const workingDir = createTempWorkingDir();
+    expect(() => routeThroughOrchestrator({ agent: 'security', task: 'scan', cwd: workingDir }, '')).toThrow('ORCHESTRATOR_TOKEN');
+  });
+
+  it('injects orchestrator token into the envelope', () => {
+    const workingDir = createTempWorkingDir();
+    const routed = routeThroughOrchestrator({ agent: 'security', task: 'scan', cwd: workingDir }, ORCHESTRATOR_TOKEN);
+
+    const match = routed.task.match(/\[\[ORCH-ENVELOPE\]\]\n([\s\S]*?)\n\[\[\/ORCH-ENVELOPE\]\]/);
+    expect(match).not.toBeNull();
+    const payload = JSON.parse(match?.[1] ?? '{}');
+    expect(payload.token).toBe(ORCHESTRATOR_TOKEN);
+    expect(routed.token).toBe(ORCHESTRATOR_TOKEN);
   });
 });
 
@@ -69,7 +85,7 @@ describe('batch', () => {
 describe('todo lifecycle', () => {
   it('records step outputs when codex execution fails', async () => {
     const workingDir = createTempWorkingDir();
-    const routed = routeThroughOrchestrator({ agent: 'reviewer', task: 'check', cwd: workingDir });
+    const routed = routeThroughOrchestrator({ agent: 'reviewer', task: 'check', cwd: workingDir }, ORCHESTRATOR_TOKEN);
     await delegateHandler({ agent: 'debugger', task: 'debug-run-step', token: ORCHESTRATOR_TOKEN, request_id: routed.request_id, cwd: workingDir });
     const todo = loadTodo(routed.request_id, workingDir);
     expect(todo.steps.length).toBe(1);
@@ -80,7 +96,7 @@ describe('todo lifecycle', () => {
 describe('e2e multi-step tracking', () => {
   it('tracks multiple delegated steps under one request id', async () => {
     const workingDir = createTempWorkingDir();
-    const routed = routeThroughOrchestrator({ agent: 'orchestrator', task: 'plan', cwd: workingDir });
+    const routed = routeThroughOrchestrator({ agent: 'orchestrator', task: 'plan', cwd: workingDir }, ORCHESTRATOR_TOKEN);
     const requestId = routed.request_id;
     await delegateHandler({ agent: 'review', task: 'review-phase', token: ORCHESTRATOR_TOKEN, request_id: requestId, cwd: workingDir });
     await delegateHandler({ agent: 'debugger', task: 'debug-phase', token: ORCHESTRATOR_TOKEN, request_id: requestId, cwd: workingDir });

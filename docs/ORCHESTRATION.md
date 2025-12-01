@@ -18,7 +18,7 @@ The envelope includes the original agent, cwd, and a generated `request_id`. A p
 
 ## Token gating
 
-Only the orchestrator may delegate further. The server issues a random `ORCHESTRATOR_TOKEN` on startup and injects it into orchestrator sub‑delegations. Attempts to delegate without the token are rejected with `"Only orchestrator can delegate. Pass server-injected token."`
+Only the orchestrator may delegate further. The server issues a random `ORCHESTRATOR_TOKEN` on startup, embeds it in the `[[ORCH-ENVELOPE]]` payload (and returns it from `routeThroughOrchestrator`), and injects it into orchestrator sub‑delegations. Attempts to delegate without the token are rejected with `"Only orchestrator can delegate. Pass server-injected token."`
 
 ## delegate_batch
 

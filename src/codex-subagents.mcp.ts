@@ -488,12 +488,12 @@ export async function delegateHandler(params: unknown) {
   if (tokenRejection) return tokenRejection;
 
   if (shouldBootstrapOrchestrator(context)) {
-    const routed = routeThroughOrchestrator(parsed);
+    const routed = routeThroughOrchestrator(parsed, ORCHESTRATOR_TOKEN);
     return delegateHandler({ ...parsed, ...routed });
   }
 
   if (needsOrchestratorProxy(context)) {
-    const routed = routeThroughOrchestrator(parsed);
+    const routed = routeThroughOrchestrator(parsed, ORCHESTRATOR_TOKEN);
     return delegateHandler({ ...parsed, ...routed });
   }
 
