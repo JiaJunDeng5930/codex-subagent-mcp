@@ -9,12 +9,13 @@
  you can swap it with minimal code changes.
 */
 
-import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync, createWriteStream } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename, resolve, relative } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
 import ignore, { Ignore } from 'ignore';
+import { createExecStdoutPath, logEvent } from './logger';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
@@ -87,13 +88,33 @@ export function run(
   cmd: string,
   args: string[],
   workingDirectory?: string,
-): Promise<{ code: number; stdout: string; stderr: string }> {
+  stdoutFilePath?: string,
+): Promise<{ code: number; stdout: string; stderr: string; stdoutFile?: string; stdoutFileError?: string }> {
   return new Promise((resolve) => {
+    let stdoutStream: ReturnType<typeof createWriteStream> | null = null;
+    let stdoutFileError: string | undefined;
+    let stdoutFileUsed: string | undefined = stdoutFilePath;
+    if (stdoutFilePath) {
+      try {
+        stdoutStream = createWriteStream(stdoutFilePath, { flags: 'a' });
+        stdoutStream.on('error', (err) => {
+          // swallow stream errors to avoid crashing the process; handled in finishStream
+          stdoutFileError = err ? String(err) : 'stdout stream error';
+        });
+      } catch (err: unknown) {
+        stdoutStream = null;
+        stdoutFileUsed = undefined;
+        stdoutFileError = err instanceof Error ? err.message : 'failed to create stdout stream';
+      }
+    }
     const child = spawn(cmd, args, { cwd: workingDirectory, env: buildSanitizedEnv() });
     const stdoutChunks: Array<string | Buffer> = [];
     const stderrChunks: Array<string | Buffer> = [];
 
-    child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    child.stdout.on('data', (chunk) => {
+      stdoutChunks.push(chunk);
+      if (stdoutStream) stdoutStream.write(chunk);
+    });
     child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
 
     const toUtf8 = (chunks: Array<string | Buffer>) => {
@@ -102,16 +123,34 @@ export function run(
       return combined.toString('utf8');
     };
 
-    child.on('close', (code) => {
-      resolve({ code: code ?? 0, stdout: toUtf8(stdoutChunks), stderr: toUtf8(stderrChunks) });
+    const finishStream = () =>
+      new Promise<void>((done) => {
+        if (!stdoutStream) return done();
+        if (stdoutStream.closed || stdoutStream.destroyed) return done();
+        let settled = false;
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          done();
+        };
+        stdoutStream.once('finish', settle);
+        stdoutStream.once('close', settle);
+        stdoutStream.once('error', settle);
+        stdoutStream.end();
+      });
+
+    child.on('close', async (code) => {
+      await finishStream();
+      resolve({ code: code ?? 0, stdout: toUtf8(stdoutChunks), stderr: toUtf8(stderrChunks), stdoutFile: stdoutFileUsed, stdoutFileError });
     });
 
-    child.on('error', (err: NodeJS.ErrnoException) => {
+    child.on('error', async (err: NodeJS.ErrnoException) => {
+      await finishStream();
       const codexMissing = err?.code === 'ENOENT';
       const message = codexMissing
         ? 'codex binary not found in PATH. Install Codex CLI and ensure it is on PATH. See README.md for setup instructions.'
         : String(err);
-      resolve({ code: 127, stdout: '', stderr: message });
+      resolve({ code: 127, stdout: '', stderr: message, stdoutFile: stdoutFileUsed, stdoutFileError });
     });
   });
 }
@@ -384,11 +423,15 @@ async function executeDelegation(
   spec: AgentSpec,
   isConfigured: boolean,
 ) {
+  let workingDir = requestWorkingDirectory;
+  let args: string[] = [];
+
   if (parsed.mirror_repo) {
     const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? agentName : 'orchestrator');
     try {
       mirrorRepoIfRequested(requestWorkingDirectory, delegatedWorkingDirectory, true);
     } catch (error) {
+      logEvent('delegate_error', { agent: agentName, reason: String(error), working_dir: delegatedWorkingDirectory }, 'error');
       return buildDelegationResponse({
         result: {
           code: 1,
@@ -401,15 +444,47 @@ async function executeDelegation(
       });
     }
     writePersonaFile(delegatedWorkingDirectory, agentName, spec.persona, spec.resourceDir);
-    const args = ['exec', '--profile', spec.profile, parsed.task];
-    const result = await run('codex', args, delegatedWorkingDirectory);
-    return buildDelegationResponse({ result, workingDir: delegatedWorkingDirectory });
+    workingDir = delegatedWorkingDirectory;
+    args = ['exec', '--profile', spec.profile, parsed.task];
+  } else {
+    const task = buildTaskWithPersonaAndResources({ persona: spec.persona, resourceDir: spec.resourceDir, originalTask: parsed.task });
+    args = ['exec', '--profile', spec.profile, task];
   }
 
-  const task = buildTaskWithPersonaAndResources({ persona: spec.persona, resourceDir: spec.resourceDir, originalTask: parsed.task });
-  const args = ['exec', '--profile', spec.profile, task];
-  const result = await run('codex', args, requestWorkingDirectory);
-  return buildDelegationResponse({ result, workingDir: requestWorkingDirectory });
+  const stdoutFile = createExecStdoutPath();
+  logEvent('codex_exec_start', {
+    agent: agentName,
+    profile: spec.profile,
+    approval_policy: spec.approval_policy,
+    sandbox_mode: spec.sandbox_mode,
+    cmd: ['codex', ...args],
+    working_dir: workingDir,
+    stdout_file: stdoutFile,
+    mirror_repo: parsed.mirror_repo,
+    resource_dir: spec.resourceDir,
+  });
+  const startedAt = Date.now();
+  const result = await run('codex', args, workingDir, stdoutFile ?? undefined);
+  const durationMs = Date.now() - startedAt;
+  const stdoutPathUsed = result.stdoutFileError ? undefined : (result.stdoutFile ?? stdoutFile);
+  const stdoutSize = stdoutPathUsed && existsSync(stdoutPathUsed) ? statSync(stdoutPathUsed).size : undefined;
+  logEvent(
+    'codex_exec_result',
+    {
+      agent: agentName,
+      profile: spec.profile,
+      cmd: ['codex', ...args],
+      working_dir: workingDir,
+      stdout_file: stdoutPathUsed,
+      stdout_file_error: result.stdoutFileError,
+      stdout_size: stdoutSize,
+      exit_code: result.code,
+      duration_ms: durationMs,
+      stderr: result.stderr,
+    },
+    result.code === 0 ? 'info' : 'error',
+  );
+  return buildDelegationResponse({ result, workingDir });
 }
 
 function buildDelegationResponse(params: { result: { code: number; stdout: string; stderr: string }; workingDir: string }) {
@@ -430,27 +505,60 @@ function buildDelegationResponse(params: { result: { code: number; stdout: strin
 export async function delegateHandler(params: unknown) {
   const parsed = DelegateParamsSchema.parse(params);
   const context = buildDelegateContext(parsed);
+  logEvent('delegate_request', {
+    agent: parsed.agent,
+    task: parsed.task,
+    cwd: context.workingDirectory,
+    mirror_repo: parsed.mirror_repo,
+    approval_policy: parsed.approval_policy,
+    sandbox_mode: parsed.sandbox_mode,
+    profile: parsed.profile,
+    has_inline_persona: Boolean(parsed.persona),
+  });
 
   const agentName = parsed.agent;
   const resolved = ensureAgentResolved(agentName, parsed);
-  if (resolved.failure) return resolved.failure;
+  if (resolved.failure) {
+    logEvent('delegate_result', { agent: agentName, result: resolved.failure }, 'error');
+    return resolved.failure;
+  }
 
-  return executeDelegation(parsed, context.workingDirectory, agentName, resolved.spec, resolved.isConfigured);
+  const response = await executeDelegation(parsed, context.workingDirectory, agentName, resolved.spec, resolved.isConfigured);
+  logEvent(
+    'delegate_result',
+    {
+      agent: agentName,
+      ok: response.ok,
+      code: response.code,
+      working_dir: response.working_dir,
+      stdout_length: response.stdout.length,
+      stderr: response.stderr,
+    },
+    response.code === 0 ? 'info' : 'error',
+  );
+  return response;
 }
 
 export async function delegateBatchHandler(params: unknown) {
   try {
     const parsed = normalizeBatchParams(params);
+    logEvent('delegate_batch_request', { items: parsed.items.length });
     const results = await Promise.allSettled(parsed.items.map((item) => delegateHandler(item)));
-    return {
+    const payload = {
       results: results.map((result) =>
         result.status === 'fulfilled'
           ? result.value
           : { ok: false, code: 1, stdout: '', stderr: String(result.reason), working_dir: '' }
       ),
     };
+    logEvent('delegate_batch_result', {
+      items: parsed.items.length,
+      codes: payload.results.map((item) => item.code),
+    });
+    return payload;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    logEvent('delegate_batch_result', { error: msg }, 'error');
     return { results: [{ ok: false, code: 1, stdout: '', stderr: msg, working_dir: '' }] };
   }
 }
@@ -669,6 +777,7 @@ class TinyMCPServer {
     const payload = (req.params ?? {}) as { name?: string; arguments?: unknown };
     const name = payload.name;
     const args = payload.arguments;
+    logEvent('tool_call_request', { name, args, jsonrpc_id: req.id ?? null, framing: this.framing });
     if (!name || !this.tools.has(name)) {
       this.writeMessage({
         jsonrpc: '2.0',
@@ -678,8 +787,10 @@ class TinyMCPServer {
       return;
     }
     const tool = this.tools.get(name)!;
+    const startedAt = Date.now();
     try {
       const data = await tool.handler(args ?? {});
+      logEvent('tool_call_result', { name, jsonrpc_id: req.id ?? null, duration_ms: Date.now() - startedAt, result: data });
       this.writeMessage({
         jsonrpc: '2.0',
         id,
@@ -691,6 +802,7 @@ class TinyMCPServer {
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      logEvent('tool_call_error', { name, jsonrpc_id: req.id ?? null, duration_ms: Date.now() - startedAt, error: msg }, 'error');
       this.writeMessage({
         jsonrpc: '2.0',
         id,
