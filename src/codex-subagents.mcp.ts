@@ -413,8 +413,19 @@ function buildDelegateContext(parsed: z.infer<typeof DelegateParamsSchema>): Del
 function buildDelegationOutcome(params: { result: { code: number; stdout: string; stderr: string }; workingDir: string }): DelegationOutcome {
   const trimmedStdout = params.result.stdout.trim();
   const trimmedStderr = params.result.stderr.trim();
-  const payloadSource = trimmedStdout.length > 0 ? 'stdout' : trimmedStderr.length > 0 ? 'stderr' : 'empty';
-  const payloadStdout = payloadSource === 'stdout' ? trimmedStdout : payloadSource === 'stderr' ? trimmedStderr : '';
+  let payloadSource: DelegationOutcome['payloadSource'];
+  let payloadStdout = '';
+
+  if (trimmedStdout.length > 0) {
+    payloadSource = 'stdout';
+    payloadStdout = trimmedStdout;
+  } else if (trimmedStderr.length > 0) {
+    payloadSource = 'stderr';
+    payloadStdout = trimmedStderr;
+  } else {
+    payloadSource = 'empty';
+  }
+
   const ok = params.result.code === 0 && trimmedStdout.length > 0;
   const meta: DelegationMeta = {
     ok,
