@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildTaskWithPersonaAndResources, delegateHandler, loadAgentsFromDir, ORCHESTRATOR_TOKEN } from '../src/codex-subagents.mcp';
+import { buildTaskWithPersonaAndResources, delegateHandler, loadAgentsFromDir } from '../src/codex-subagents.mcp';
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -51,7 +51,7 @@ describe('directory-based agents', () => {
     trash.push(requestCwd);
     writeFileSync(join(requestCwd, 'readme.txt'), 'mirror me', 'utf8');
 
-    const response = await delegateHandler({ agent: 'writer', task: 'noop', mirror_repo: true, token: ORCHESTRATOR_TOKEN, cwd: requestCwd });
+    const response = await delegateHandler({ agent: 'writer', task: 'noop', mirror_repo: true, cwd: requestCwd });
 
     expect(response.working_dir).toBeTruthy();
     const agentsPath = join(response.working_dir, 'AGENTS.md');
@@ -74,7 +74,7 @@ describe('directory-based agents', () => {
     const requestCwd = mkdtempSync(join(tmpdir(), 'delegate-cwd-'));
     trash.push(requestCwd);
 
-    const response = await delegateHandler({ agent: 'nomirror', task: 'original task', mirror_repo: false, cwd: requestCwd, token: ORCHESTRATOR_TOKEN });
+    const response = await delegateHandler({ agent: 'nomirror', task: 'original task', mirror_repo: false, cwd: requestCwd });
 
     expect(response.working_dir).toBe(requestCwd);
     expect(existsSync(join(requestCwd, 'AGENTS.md'))).toBe(false);

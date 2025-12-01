@@ -9,19 +9,16 @@
  you can swap it with minimal code changes.
 */
 
-import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync, mkdirSync } from 'fs';
+import { mkdtempSync, writeFileSync, cpSync, existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename, resolve, relative } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
-import { randomBytes } from 'crypto';
-import { routeThroughOrchestrator, loadTodo, saveTodo, appendStep, updateStep } from './orchestration';
 import ignore, { Ignore } from 'ignore';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
 const START_TIME = Date.now();
-export const ORCHESTRATOR_TOKEN = randomBytes(16).toString('hex');
 
 // Personas and profiles
 type AgentKey = 'orchestrator';
@@ -42,12 +39,9 @@ export const AGENTS: Record<AgentKey, AgentSpec> = {
     sandbox_mode: 'workspace-write',
     persona:
       [
-        'Parse [[ORCH-ENVELOPE]] JSON if present; use request_id.',
-        'Maintain and evolve a To-Do plan aligned to the user goal.',
-        'Use subagents.delegate / subagents.delegate_batch for subtasks, always passing token="<server-injected-token>" and request_id.',
-        'Prefer parallel for independent work; sequential for dependencies.',
+        'Plan the path to the user goal, keep a lightweight to-do, and delegate concrete subtasks to other agents when helpful.',
+        'Use subagents.delegate / subagents.delegate_batch for subtasks; prefer parallel for independent work, sequential for dependencies.',
         'Summarize after each batch, decide next steps, stop when the user goal is achieved.',
-        'Never delegate without the token; refuse and explain if token is missing.',
         'Non-orchestrator agents must not delegate; they perform local work only.',
       ].join('\n'),
   },
@@ -65,15 +59,12 @@ export const DelegateParamsSchema = z.object({
   persona: z.string().optional(),
   approval_policy: z.enum(['never', 'on-request', 'on-failure', 'untrusted']).optional(),
   sandbox_mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
-  token: z.string().optional(),
-  request_id: z.string().optional(),
 });
 
 export type DelegateParams = z.infer<typeof DelegateParamsSchema>;
 
 export const DelegateBatchParamsSchema = z.object({
   items: z.array(DelegateParamsSchema),
-  token: z.string().optional(),
 });
 export type DelegateBatchParams = z.infer<typeof DelegateBatchParamsSchema>;
 
@@ -357,54 +348,13 @@ function resolveAgent(agentName: string, parsed: DelegateParams): { spec: AgentS
 type DelegateContext = {
   parsed: z.infer<typeof DelegateParamsSchema>;
   workingDirectory: string;
-  isOrchestratorRequest: boolean;
-  hasServerToken: boolean;
-  hasRequestId: boolean;
 };
 
 function buildDelegateContext(parsed: z.infer<typeof DelegateParamsSchema>): DelegateContext {
   return {
     parsed,
     workingDirectory: parsed.cwd ?? process.cwd(),
-    isOrchestratorRequest: parsed.agent === 'orchestrator',
-    hasServerToken: parsed.token === ORCHESTRATOR_TOKEN,
-    hasRequestId: Boolean(parsed.request_id),
   };
-}
-
-function rejectClientDelegationWithoutToken(context: DelegateContext) {
-  const requiresTokenValidation = context.hasRequestId && !context.isOrchestratorRequest;
-  if (!requiresTokenValidation) return null;
-  if (context.hasServerToken) return null;
-  return {
-    ok: false,
-    code: 1,
-    stdout: '',
-    stderr: 'Only orchestrator can delegate. Pass server-injected token.',
-    working_dir: '',
-  } as const;
-}
-
-function shouldBootstrapOrchestrator(context: DelegateContext) {
-  const wantsOrchestrator = context.isOrchestratorRequest;
-  const isFirstRequest = !context.hasRequestId;
-  return wantsOrchestrator && isFirstRequest;
-}
-
-function needsOrchestratorProxy(context: DelegateContext) {
-  const isClientRequest = !context.isOrchestratorRequest;
-  if (!isClientRequest) return false;
-  if (context.hasServerToken) return false;
-  return true;
-}
-
-function ensureOrchestrationDirs(context: DelegateContext) {
-  const isOrchestrator = context.isOrchestratorRequest;
-  const hasRequestId = context.hasRequestId;
-  if (!isOrchestrator) return;
-  if (!hasRequestId) return;
-
-  mkdirSync(join(context.workingDirectory, 'orchestration', context.parsed.request_id as string), { recursive: true });
 }
 
 function ensureAgentResolved(agentName: string, parsed: DelegateParams) {
@@ -434,7 +384,6 @@ async function executeDelegation(
   spec: AgentSpec,
   isConfigured: boolean,
 ) {
-  const stepId = recordRunningStep(parsed, requestWorkingDirectory);
   if (parsed.mirror_repo) {
     const delegatedWorkingDirectory = prepareWorkingDirectory(isConfigured ? agentName : 'orchestrator');
     try {
@@ -454,14 +403,12 @@ async function executeDelegation(
     writePersonaFile(delegatedWorkingDirectory, agentName, spec.persona, spec.resourceDir);
     const args = ['exec', '--profile', spec.profile, parsed.task];
     const result = await run('codex', args, delegatedWorkingDirectory);
-    finalizeStep(parsed, requestWorkingDirectory, stepId, result);
     return buildDelegationResponse({ result, workingDir: delegatedWorkingDirectory });
   }
 
   const task = buildTaskWithPersonaAndResources({ persona: spec.persona, resourceDir: spec.resourceDir, originalTask: parsed.task });
   const args = ['exec', '--profile', spec.profile, task];
   const result = await run('codex', args, requestWorkingDirectory);
-  finalizeStep(parsed, requestWorkingDirectory, stepId, result);
   return buildDelegationResponse({ result, workingDir: requestWorkingDirectory });
 }
 
@@ -484,21 +431,6 @@ export async function delegateHandler(params: unknown) {
   const parsed = DelegateParamsSchema.parse(params);
   const context = buildDelegateContext(parsed);
 
-  const tokenRejection = rejectClientDelegationWithoutToken(context);
-  if (tokenRejection) return tokenRejection;
-
-  if (shouldBootstrapOrchestrator(context)) {
-    const routed = routeThroughOrchestrator(parsed, ORCHESTRATOR_TOKEN);
-    return delegateHandler({ ...parsed, ...routed });
-  }
-
-  if (needsOrchestratorProxy(context)) {
-    const routed = routeThroughOrchestrator(parsed, ORCHESTRATOR_TOKEN);
-    return delegateHandler({ ...parsed, ...routed });
-  }
-
-  ensureOrchestrationDirs(context);
-
   const agentName = parsed.agent;
   const resolved = ensureAgentResolved(agentName, parsed);
   if (resolved.failure) return resolved.failure;
@@ -506,56 +438,10 @@ export async function delegateHandler(params: unknown) {
   return executeDelegation(parsed, context.workingDirectory, agentName, resolved.spec, resolved.isConfigured);
 }
 
-function recordRunningStep(params: DelegateParams, requestWorkingDirectory: string): string | undefined {
-  const isDelegatedTask = params.agent !== 'orchestrator';
-  const hasOrchestratorToken = params.token === ORCHESTRATOR_TOKEN;
-  const hasRequestId = Boolean(params.request_id);
-  if (!isDelegatedTask) return undefined;
-  if (!hasOrchestratorToken) return undefined;
-  if (!hasRequestId) return undefined;
-
-  const requestId = params.request_id as string;
-  const todo = loadTodo(requestId, requestWorkingDirectory);
-  const title = params.task.split('\n')[0].slice(0, 80);
-  const step = appendStep(todo, {
-    title,
-    requested_agent: params.agent,
-    status: 'running',
-    started_at: new Date().toISOString(),
-  });
-  saveTodo(todo, requestWorkingDirectory);
-  return step.id;
-}
-
-function finalizeStep(
-  params: DelegateParams,
-  requestWorkingDirectory: string,
-  stepId: string | undefined,
-  result: { code: number; stdout: string; stderr: string },
-) {
-  if (!stepId) return;
-  if (!params.request_id) return;
-
-  const todo = loadTodo(params.request_id, requestWorkingDirectory);
-  const stepDir = join(requestWorkingDirectory, 'orchestration', params.request_id, 'steps', stepId);
-  mkdirSync(stepDir, { recursive: true });
-  writeFileSync(join(stepDir, 'stdout.txt'), result.stdout, 'utf8');
-  writeFileSync(join(stepDir, 'stderr.txt'), result.stderr, 'utf8');
-  updateStep(todo, stepId, {
-    ended_at: new Date().toISOString(),
-    status: result.code === 0 ? 'done' : 'blocked',
-    stdout_path: join('steps', stepId, 'stdout.txt'),
-    stderr_path: join('steps', stepId, 'stderr.txt'),
-  });
-  saveTodo(todo, requestWorkingDirectory);
-}
-
 export async function delegateBatchHandler(params: unknown) {
   try {
     const parsed = normalizeBatchParams(params);
-    const results = await Promise.allSettled(
-      parsed.items.map((item) => delegateHandler({ ...item, token: item.token ?? parsed.token }))
-    );
+    const results = await Promise.allSettled(parsed.items.map((item) => delegateHandler(item)));
     return {
       results: results.map((result) =>
         result.status === 'fulfilled'
@@ -569,14 +455,14 @@ export async function delegateBatchHandler(params: unknown) {
   }
 }
 
-function normalizeBatchParams(params: unknown): { items: DelegateParams[]; token?: string } {
+function normalizeBatchParams(params: unknown): { items: DelegateParams[] } {
   if (isSingleDelegateShape(params)) {
     const single = DelegateParamsSchema.parse(params);
     return { items: [single] };
   }
   const batch = DelegateBatchParamsSchema.parse(params);
   const items = batch.items.map(item => DelegateParamsSchema.parse(item));
-  return { items, token: batch.token };
+  return { items };
 }
 
 function isSingleDelegateShape(params: unknown): params is Record<string, unknown> {
@@ -863,7 +749,7 @@ server.addTool({
 server.addTool({
   name: 'delegate_batch',
   description:
-    'Run multiple sub-agents in parallel. Input must be {items:[{agent,task,...}], token?}; each item matches delegate.',
+    'Run multiple sub-agents in parallel. Input must be {items:[{agent,task,...}]}; each item matches delegate.',
   inputSchema: toJsonSchema(DelegateBatchParamsSchema),
   handler: (args: unknown) => delegateBatchHandler(args),
 });
