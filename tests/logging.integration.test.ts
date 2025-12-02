@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe('logging integration', () => {
-  it('records codex exec stdout into a dedicated file and references it in logs', async () => {
+  it('records codex exec stdout/stderr into dedicated files and references them in logs', async () => {
     const stateHome = mkdtempSync(join(tmpdir(), 'mcp-logs-'));
     tempDirs.push(stateHome);
     process.env.XDG_STATE_HOME = stateHome;
@@ -30,6 +30,7 @@ describe('logging integration', () => {
 
     const logDir = join(stateHome, 'codex-subagent-mcp', 'logs');
     const stdoutDir = join(logDir, 'exec-stdout');
+    const stderrDir = join(logDir, 'exec-stderr');
     const logFiles = readdirSync(logDir).filter((file) => file.endsWith('.log'));
     expect(logFiles.length).toBeGreaterThan(0);
 
@@ -46,7 +47,15 @@ describe('logging integration', () => {
     const stdoutFile = startEntry?.stdout_file as string;
     expect(stdoutFile.startsWith(stdoutDir)).toBe(true);
     expect(existsSync(stdoutFile)).toBe(true);
-  });
+
+    expect(startEntry?.stderr_file).toBeTruthy();
+    expect(resultEntry?.stderr_file).toBe(startEntry?.stderr_file);
+    const stderrFile = startEntry?.stderr_file as string;
+    expect(stderrFile.startsWith(stderrDir)).toBe(true);
+    expect(existsSync(stderrFile)).toBe(true);
+    readFileSync(stderrFile, 'utf8');
+    expect(resultEntry).not.toHaveProperty('stderr');
+  }, 15000);
 
   it('writes full stdout to file when run is given a stdout path', async () => {
     const temp = mkdtempSync(join(tmpdir(), 'stdout-'));
@@ -54,10 +63,23 @@ describe('logging integration', () => {
     const stdoutPath = join(temp, 'out.txt');
     const { run } = await import('../src/codex-subagents.mcp');
 
-    const result = await run(process.execPath, ['-e', 'console.log(\"hello stdout\")'], temp, stdoutPath);
+    const result = await run(process.execPath, ['-e', 'console.log("hello stdout")'], temp, stdoutPath);
 
     expect(result.stdout).toContain('hello stdout');
     const fileContent = readFileSync(stdoutPath, 'utf8');
     expect(fileContent).toContain('hello stdout');
+  });
+
+  it('writes full stderr to file when run is given a stderr path', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'stderr-'));
+    tempDirs.push(temp);
+    const stderrPath = join(temp, 'err.txt');
+    const { run } = await import('../src/codex-subagents.mcp');
+
+    const result = await run(process.execPath, ['-e', 'console.error("hello stderr")'], temp, undefined, stderrPath);
+
+    expect(result.stderr).toContain('hello stderr');
+    const fileContent = readFileSync(stderrPath, 'utf8');
+    expect(fileContent).toContain('hello stderr');
   });
 });

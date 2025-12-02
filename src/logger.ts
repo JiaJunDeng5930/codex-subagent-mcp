@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'os';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-type LogPaths = { logDir: string; logFile: string; execStdoutDir: string };
+type LogPaths = { logDir: string; logFile: string; execStdoutDir: string; execStderrDir: string };
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 const DEFAULT_MAX_STRING = 4000;
@@ -25,8 +25,10 @@ function pickLogPaths(): LogPaths {
     try {
       const logDir = join(base, 'logs');
       const execStdoutDir = join(logDir, 'exec-stdout');
+      const execStderrDir = join(logDir, 'exec-stderr');
       mkdirSync(execStdoutDir, { recursive: true });
-      return { logDir, logFile: join(logDir, 'mcp.log'), execStdoutDir };
+      mkdirSync(execStderrDir, { recursive: true });
+      return { logDir, logFile: join(logDir, 'mcp.log'), execStdoutDir, execStderrDir };
     } catch {
       // try next candidate
     }
@@ -35,8 +37,10 @@ function pickLogPaths(): LogPaths {
   const fallbackBase = join(tmpdir(), 'codex-subagent-mcp');
   const logDir = join(fallbackBase, 'logs');
   const execStdoutDir = join(logDir, 'exec-stdout');
+  const execStderrDir = join(logDir, 'exec-stderr');
   mkdirSync(execStdoutDir, { recursive: true });
-  return { logDir, logFile: join(logDir, 'mcp.log'), execStdoutDir };
+  mkdirSync(execStderrDir, { recursive: true });
+  return { logDir, logFile: join(logDir, 'mcp.log'), execStdoutDir, execStderrDir };
 }
 
 const paths = pickLogPaths();
@@ -110,16 +114,20 @@ export function logEvent(event: string, payload: Record<string, unknown>, level:
   }
 }
 
-export function createExecStdoutPath(): string | null {
+function createExecStreamPath(kind: 'stdout' | 'stderr'): string | null {
   try {
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
     const nonce = randomBytes(4).toString('hex');
-    mkdirSync(paths.execStdoutDir, { recursive: true });
-    return join(paths.execStdoutDir, `exec-${stamp}-${process.pid}-${nonce}.stdout`);
+    const dir = kind === 'stdout' ? paths.execStdoutDir : paths.execStderrDir;
+    mkdirSync(dir, { recursive: true });
+    return join(dir, `exec-${stamp}-${process.pid}-${nonce}.${kind}`);
   } catch {
     return null;
   }
 }
+
+export const createExecStdoutPath = () => createExecStreamPath('stdout');
+export const createExecStderrPath = () => createExecStreamPath('stderr');
 
 export const logger = {
   log: logEvent,

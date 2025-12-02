@@ -15,7 +15,7 @@ import { join, basename, resolve, relative } from 'path';
 import { spawn } from 'child_process';
 import { z } from 'zod';
 import ignore, { Ignore } from 'ignore';
-import { createExecStdoutPath, logEvent } from './logger';
+import { createExecStdoutPath, createExecStderrPath, logEvent } from './logger';
 
 const SERVER_NAME = 'codex-subagents';
 const SERVER_VERSION = '0.1.0';
@@ -103,33 +103,49 @@ export function run(
   args: string[],
   workingDirectory?: string,
   stdoutFilePath?: string,
-): Promise<{ code: number; stdout: string; stderr: string; stdoutFile?: string; stdoutFileError?: string }> {
+  stderrFilePath?: string,
+): Promise<{
+  code: number;
+  stdout: string;
+  stderr: string;
+  stdoutFile?: string;
+  stdoutFileError?: string;
+  stderrFile?: string;
+  stderrFileError?: string;
+}> {
   return new Promise((resolve) => {
-    let stdoutStream: ReturnType<typeof createWriteStream> | null = null;
-    let stdoutFileError: string | undefined;
-    let stdoutFileUsed: string | undefined = stdoutFilePath;
-    if (stdoutFilePath) {
+    const prepareStream = (filePath?: string, label?: 'stdout' | 'stderr') => {
+      let stream: ReturnType<typeof createWriteStream> | null = null;
+      let fileError: string | undefined;
+      let fileUsed: string | undefined = filePath;
+      if (!filePath) return { stream, fileUsed: undefined, fileError };
       try {
-        stdoutStream = createWriteStream(stdoutFilePath, { flags: 'a' });
-        stdoutStream.on('error', (err) => {
-          // swallow stream errors to avoid crashing the process; handled in finishStream
-          stdoutFileError = err ? String(err) : 'stdout stream error';
+        stream = createWriteStream(filePath, { flags: 'a' });
+        stream.on('error', (err) => {
+          fileError = err ? String(err) : `${label ?? 'stream'} error`;
         });
       } catch (err: unknown) {
-        stdoutStream = null;
-        stdoutFileUsed = undefined;
-        stdoutFileError = err instanceof Error ? err.message : 'failed to create stdout stream';
+        stream = null;
+        fileUsed = undefined;
+        fileError = err instanceof Error ? err.message : `failed to create ${label ?? 'stream'}`;
       }
-    }
+      return { stream, fileUsed, fileError };
+    };
+
+    const stdoutStream = prepareStream(stdoutFilePath, 'stdout');
+    const stderrStream = prepareStream(stderrFilePath, 'stderr');
     const child = spawn(cmd, args, { cwd: workingDirectory, env: buildSanitizedEnv() });
     const stdoutChunks: Array<string | Buffer> = [];
     const stderrChunks: Array<string | Buffer> = [];
 
     child.stdout.on('data', (chunk) => {
       stdoutChunks.push(chunk);
-      if (stdoutStream) stdoutStream.write(chunk);
+      if (stdoutStream.stream) stdoutStream.stream.write(chunk);
     });
-    child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+    child.stderr.on('data', (chunk) => {
+      stderrChunks.push(chunk);
+      if (stderrStream.stream) stderrStream.stream.write(chunk);
+    });
 
     const toUtf8 = (chunks: Array<string | Buffer>) => {
       const normalized = chunks.map((part) => (Buffer.isBuffer(part) ? part : Buffer.from(String(part))));
@@ -137,34 +153,53 @@ export function run(
       return combined.toString('utf8');
     };
 
-    const finishStream = () =>
+    const finishStream = (stream: ReturnType<typeof createWriteStream> | null) =>
       new Promise<void>((done) => {
-        if (!stdoutStream) return done();
-        if (stdoutStream.closed || stdoutStream.destroyed) return done();
+        if (!stream) return done();
+        if (stream.closed || stream.destroyed) return done();
         let settled = false;
         const settle = () => {
           if (settled) return;
           settled = true;
           done();
         };
-        stdoutStream.once('finish', settle);
-        stdoutStream.once('close', settle);
-        stdoutStream.once('error', settle);
-        stdoutStream.end();
+        stream.once('finish', settle);
+        stream.once('close', settle);
+        stream.once('error', settle);
+        stream.end();
       });
 
     child.on('close', async (code) => {
-      await finishStream();
-      resolve({ code: code ?? 0, stdout: toUtf8(stdoutChunks), stderr: toUtf8(stderrChunks), stdoutFile: stdoutFileUsed, stdoutFileError });
+      await Promise.all([finishStream(stdoutStream.stream), finishStream(stderrStream.stream)]);
+      resolve({
+        code: code ?? 0,
+        stdout: toUtf8(stdoutChunks),
+        stderr: toUtf8(stderrChunks),
+        stdoutFile: stdoutStream.fileUsed,
+        stdoutFileError: stdoutStream.fileError,
+        stderrFile: stderrStream.fileUsed,
+        stderrFileError: stderrStream.fileError,
+      });
     });
 
     child.on('error', async (err: NodeJS.ErrnoException) => {
-      await finishStream();
       const codexMissing = err?.code === 'ENOENT';
       const message = codexMissing
         ? 'codex binary not found in PATH. Install Codex CLI and ensure it is on PATH. See README.md for setup instructions.'
         : String(err);
-      resolve({ code: 127, stdout: '', stderr: message, stdoutFile: stdoutFileUsed, stdoutFileError });
+      if (stderrStream.stream) {
+        stderrStream.stream.write(message);
+      }
+      await Promise.all([finishStream(stdoutStream.stream), finishStream(stderrStream.stream)]);
+      resolve({
+        code: 127,
+        stdout: '',
+        stderr: message,
+        stdoutFile: stdoutStream.fileUsed,
+        stdoutFileError: stdoutStream.fileError,
+        stderrFile: stderrStream.fileUsed,
+        stderrFileError: stderrStream.fileError,
+      });
     });
   });
 }
@@ -498,6 +533,7 @@ async function executeDelegation(
   }
 
   const stdoutFile = createExecStdoutPath();
+  const stderrFile = createExecStderrPath();
   logEvent('codex_exec_start', {
     agent: agentName,
     profile: spec.profile,
@@ -506,14 +542,17 @@ async function executeDelegation(
     cmd: ['codex', ...args],
     working_dir: workingDir,
     stdout_file: stdoutFile,
+    stderr_file: stderrFile,
     mirror_repo: parsed.mirror_repo,
     resource_dir: spec.resourceDir,
   });
   const startedAt = Date.now();
-  const result = await run('codex', args, workingDir, stdoutFile ?? undefined);
+  const result = await run('codex', args, workingDir, stdoutFile ?? undefined, stderrFile ?? undefined);
   const durationMs = Date.now() - startedAt;
   const stdoutPathUsed = result.stdoutFileError ? undefined : (result.stdoutFile ?? stdoutFile);
+  const stderrPathUsed = result.stderrFileError ? undefined : (result.stderrFile ?? stderrFile);
   const stdoutSize = stdoutPathUsed && existsSync(stdoutPathUsed) ? statSync(stdoutPathUsed).size : undefined;
+  const stderrSize = stderrPathUsed && existsSync(stderrPathUsed) ? statSync(stderrPathUsed).size : undefined;
   logEvent(
     'codex_exec_result',
     {
@@ -524,9 +563,11 @@ async function executeDelegation(
       stdout_file: stdoutPathUsed,
       stdout_file_error: result.stdoutFileError,
       stdout_size: stdoutSize,
+      stderr_file: stderrPathUsed,
+      stderr_file_error: result.stderrFileError,
+      stderr_size: stderrSize,
       exit_code: result.code,
       duration_ms: durationMs,
-      stderr: result.stderr,
     },
     result.code === 0 ? 'info' : 'error',
   );
